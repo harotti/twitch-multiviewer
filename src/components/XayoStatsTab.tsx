@@ -20,17 +20,11 @@ import {
   Check,
   TrendingUp,
   Heart,
-  Calendar,
-  Sparkles,
   Download,
   RotateCcw,
   User,
-  SlidersHorizontal,
-  Maximize2,
-  Tv,
   Shield,
 } from 'lucide-react';
-import { openTwitchModView } from '../services/twitchApi';
 
 interface XayoStatsTabProps {
   currentUser: TwitchUser | null;
@@ -40,6 +34,8 @@ interface XayoStatsTabProps {
   activeChannels: string[];
   onAddChannel: (channel: string) => void;
   onRemoveChannel: (channel: string) => void;
+  onOpenModView?: (channel: string) => void;
+  onLogin?: () => void;
   lang?: 'pl' | 'en';
 }
 
@@ -53,11 +49,13 @@ export function XayoStatsTab({
   activeChannels,
   onAddChannel,
   onRemoveChannel,
+  onOpenModView,
+  onLogin,
   lang = 'pl',
 }: XayoStatsTabProps) {
-  // Analyzed user: default to hattoripol or logged-in user
+  // Analyzed user: automatically uses logged-in user, or saved user in localStorage, or empty
   const [analyzedUser, setAnalyzedUser] = useState<string>(() => {
-    return currentUser?.login || 'hattoripol';
+    return currentUser?.login || localStorage.getItem('xayo_analyzed_user') || '';
   });
   const [userInput, setUserInput] = useState<string>(analyzedUser);
   const [period, setPeriod] = useState<XayoPeriod>('all');
@@ -67,15 +65,21 @@ export function XayoStatsTab({
   const [filterQuery, setFilterQuery] = useState<string>('');
   const [sortField, setSortField] = useState<SortField>('time');
 
-  // Quick switch if user logs in
+  // If user logs in or currentUser changes, auto-switch to their account
   useEffect(() => {
-    if (currentUser?.login && analyzedUser === 'hattoripol') {
+    if (currentUser?.login) {
       setAnalyzedUser(currentUser.login);
       setUserInput(currentUser.login);
+      localStorage.setItem('xayo_analyzed_user', currentUser.login);
+    } else {
+      const saved = localStorage.getItem('xayo_analyzed_user');
+      if (saved && !analyzedUser) {
+        setAnalyzedUser(saved);
+        setUserInput(saved);
+      }
     }
-  }, [currentUser]);
+  }, [currentUser?.login]);
 
-  // Map followed channels by lowercase broadcaster_login for instant O(1) lookup
   const followedMap = useMemo(() => {
     const map = new Map<string, TwitchChannelInfo>();
     followedChannels.forEach((ch) => {
@@ -95,7 +99,12 @@ export function XayoStatsTab({
   // Fetch watchtime data from xayo.pl
   const loadData = async (userToFetch: string, selectedPeriod: XayoPeriod) => {
     const clean = userToFetch.trim().toLowerCase();
-    if (!clean) return;
+    if (!clean) {
+      setEntries([]);
+      setIsLoading(false);
+      setErrorMessage(null);
+      return;
+    }
 
     setIsLoading(true);
     setErrorMessage(null);
@@ -126,9 +135,9 @@ export function XayoStatsTab({
     const clean = userInput.trim().toLowerCase();
     if (!clean) return;
     setAnalyzedUser(clean);
+    localStorage.setItem('xayo_analyzed_user', clean);
   };
 
-  // Aggregated Summary
   const totalMinutes = useMemo(() => {
     return entries.reduce((acc, curr) => acc + (curr.minutes || 0), 0);
   }, [entries]);
@@ -145,17 +154,13 @@ export function XayoStatsTab({
   const processedEntries = useMemo(() => {
     let list = [...entries];
 
-    // Filter by name
     if (filterQuery.trim()) {
       const q = filterQuery.trim().toLowerCase();
       list = list.filter((item) => item.streamerName.toLowerCase().includes(q));
     }
 
-    // Sort
     list.sort((a, b) => {
-      if (sortField === 'time') {
-        return (b.minutes || 0) - (a.minutes || 0);
-      }
+      if (sortField === 'time') return (b.minutes || 0) - (a.minutes || 0);
       if (sortField === 'lastSeen') {
         const timeA = new Date(a.lastSeen.replace(' ', 'T')).getTime() || 0;
         const timeB = new Date(b.lastSeen.replace(' ', 'T')).getTime() || 0;
@@ -166,18 +171,16 @@ export function XayoStatsTab({
         const followB = followedMap.get(b.streamerName.toLowerCase())?.followed_at;
         const dateA = followA ? new Date(followA).getTime() : 0;
         const dateB = followB ? new Date(followB).getTime() : 0;
-        return dateA - dateB; // earliest followed first
+        return dateA - dateB;
       }
-      if (sortField === 'alpha') {
-        return a.streamerName.localeCompare(b.streamerName);
-      }
+      if (sortField === 'alpha') return a.streamerName.localeCompare(b.streamerName);
       return 0;
     });
 
     return list;
   }, [entries, filterQuery, sortField, followedMap]);
 
-  // Export to CSV / JSON
+  // Export
   const handleExport = (type: 'csv' | 'json') => {
     if (type === 'json') {
       const dataStr =
@@ -209,20 +212,9 @@ export function XayoStatsTab({
       downloadAnchor.click();
       downloadAnchor.remove();
     } else {
-      const headers = [
-        'Streamer',
-        'Minutes',
-        'Hours',
-        'Percentage',
-        'LastSeen',
-        'FollowedAt',
-        'FollowDuration',
-      ];
+      const headers = ['Streamer', 'Minutes', 'Hours', 'Percentage', 'LastSeen', 'FollowedAt', 'FollowDuration'];
       const rows = entries.map((e) => {
-        const follow = formatFollowedDate(
-          followedMap.get(e.streamerName.toLowerCase())?.followed_at,
-          lang
-        );
+        const follow = formatFollowedDate(followedMap.get(e.streamerName.toLowerCase())?.followed_at, lang);
         const percent = totalMinutes > 0 ? ((e.minutes / totalMinutes) * 100).toFixed(1) : '0';
         return [
           e.streamerName,
@@ -234,16 +226,11 @@ export function XayoStatsTab({
           follow ? follow.durationText : 'N/A',
         ];
       });
-      const csvContent =
-        'data:text/csv;charset=utf-8,' +
-        [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement('a');
       link.setAttribute('href', encodedUri);
-      link.setAttribute(
-        'download',
-        `xayo-stats-${analyzedUser}-${period}-${new Date().toISOString().slice(0, 10)}.csv`
-      );
+      link.setAttribute('download', `xayo-stats-${analyzedUser}-${period}-${new Date().toISOString().slice(0, 10)}.csv`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -251,104 +238,69 @@ export function XayoStatsTab({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto flex flex-col p-3 space-y-3.5 text-xs">
-      {/* Chatter Switcher Bar */}
+    <div className="flex-1 overflow-y-auto flex flex-col p-3 space-y-3 text-xs">
+      {/* Chatter Switcher & Search Bar */}
       <div className="bg-[#202025] border border-zinc-800 rounded-xl p-3 space-y-2.5 shadow-sm">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="font-semibold text-white flex items-center gap-1.5">
-              <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
-              <span>{lang === 'pl' ? 'Statystyki Czasu (xayo.pl)' : 'Watch Time Stats (xayo.pl)'}</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <TrendingUp className="w-4 h-4 text-purple-400 shrink-0" />
+            <span className="font-bold text-white truncate text-xs">
+              {lang === 'pl' ? 'Statystyki Czasu' : 'Watch Time'}
             </span>
           </div>
+
           <a
-            href={`https://xayo.pl/${analyzedUser}`}
+            href={analyzedUser ? `https://xayo.pl/${encodeURIComponent(analyzedUser)}` : 'https://xayo.pl'}
             target="_blank"
             rel="noopener noreferrer"
             title={lang === 'pl' ? 'Otwórz na xayo.pl' : 'Open on xayo.pl'}
-            className="text-[11px] text-purple-400 hover:text-purple-300 flex items-center gap-1 font-medium transition-colors"
+            className="text-[11px] text-purple-400 hover:text-purple-300 flex items-center gap-1 font-semibold transition-colors shrink-0"
           >
-            <span>xayo.pl/{analyzedUser}</span>
+            <span>{analyzedUser ? `xayo.pl/${analyzedUser}` : 'xayo.pl'}</span>
             <ExternalLink className="w-3 h-3" />
           </a>
         </div>
 
-        {/* Input for user search */}
-        <form onSubmit={handleSearchSubmit} className="flex gap-1.5">
+        {/* Search input with integrated submit & refresh */}
+        <form onSubmit={handleSearchSubmit} className="flex gap-1.5 items-center">
           <div className="relative flex-1">
             <User className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-zinc-500" />
             <input
               type="text"
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
-              placeholder={lang === 'pl' ? 'Wpisz nick (np. hattoripol)...' : 'Enter username (e.g. hattoripol)...'}
-              className="w-full bg-[#141416] border border-zinc-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-hidden focus:border-purple-500 transition-colors"
+              placeholder={lang === 'pl' ? 'Wpisz nick na Twitchu...' : 'Enter Twitch username...'}
+              className="w-full bg-[#141416] border border-zinc-700/80 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-hidden focus:border-purple-500 transition-colors"
             />
           </div>
+
           <button
             type="submit"
+            title={lang === 'pl' ? 'Szukaj użytkownika' : 'Search user'}
             className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 shrink-0 cursor-pointer"
           >
             <Search className="w-3.5 h-3.5" />
-            <span>{lang === 'pl' ? 'Szukaj' : 'Search'}</span>
+            <span className="hidden sm:inline">{lang === 'pl' ? 'Szukaj' : 'Search'}</span>
           </button>
-        </form>
-
-        {/* Quick chip shortcuts */}
-        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-          <span className="text-[10px] text-zinc-500">
-            {lang === 'pl' ? 'Szybki wybór:' : 'Quick:'}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setAnalyzedUser('hattoripol');
-              setUserInput('hattoripol');
-            }}
-            className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-              analyzedUser === 'hattoripol'
-                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
-                : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'
-            }`}
-          >
-            hattoripol
-          </button>
-
-          {currentUser?.login && currentUser.login !== 'hattoripol' && (
-            <button
-              type="button"
-              onClick={() => {
-                setAnalyzedUser(currentUser.login);
-                setUserInput(currentUser.login);
-              }}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                analyzedUser === currentUser.login
-                  ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
-                  : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'
-              }`}
-            >
-              Twój nick: {currentUser.login}
-            </button>
-          )}
 
           <button
             type="button"
             onClick={() => loadData(analyzedUser, period)}
             title={lang === 'pl' ? 'Odśwież dane' : 'Refresh data'}
-            className="ml-auto text-zinc-400 hover:text-purple-300 p-1 rounded transition-colors"
+            className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors shrink-0"
           >
             <RotateCcw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
-        </div>
+        </form>
       </div>
 
       {/* Period Selector Tabs */}
       <div className="grid grid-cols-3 gap-1 bg-[#141416] p-1 rounded-xl border border-zinc-800 text-center font-medium text-[11px]">
         <button
           onClick={() => setPeriod('all')}
-          className={`py-1.5 rounded-lg transition-colors ${
+          className={`py-1.5 rounded-lg transition-colors cursor-pointer ${
             period === 'all'
-              ? 'bg-purple-600 text-white font-semibold shadow-xs'
+              ? 'bg-purple-600 text-white font-bold shadow-xs'
               : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
@@ -356,34 +308,34 @@ export function XayoStatsTab({
         </button>
         <button
           onClick={() => setPeriod('365d')}
-          className={`py-1.5 rounded-lg transition-colors ${
+          className={`py-1.5 rounded-lg transition-colors cursor-pointer ${
             period === '365d'
-              ? 'bg-purple-600 text-white font-semibold shadow-xs'
+              ? 'bg-purple-600 text-white font-bold shadow-xs'
               : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          {lang === 'pl' ? 'Ostatni rok (365d)' : 'Past year (365d)'}
+          {lang === 'pl' ? '365 dni' : '365 days'}
         </button>
         <button
           onClick={() => setPeriod('30d')}
-          className={`py-1.5 rounded-lg transition-colors ${
+          className={`py-1.5 rounded-lg transition-colors cursor-pointer ${
             period === '30d'
-              ? 'bg-purple-600 text-white font-semibold shadow-xs'
+              ? 'bg-purple-600 text-white font-bold shadow-xs'
               : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          {lang === 'pl' ? '30 dni' : 'Past 30 days'}
+          {lang === 'pl' ? '30 dni' : '30 days'}
         </button>
       </div>
 
       {/* Summary KPI Cards */}
       {entries.length > 0 && (
         <div className="grid grid-cols-2 gap-2">
-          <div className="p-2.5 bg-[#202025] border border-zinc-800/90 rounded-xl relative overflow-hidden">
+          <div className="p-2.5 bg-[#202025] border border-zinc-800/90 rounded-xl">
             <span className="text-[10px] text-zinc-400 block font-medium">
-              {lang === 'pl' ? 'Łączny czas oglądania' : 'Total watch time'}
+              {lang === 'pl' ? 'Łączny czas' : 'Total watch time'}
             </span>
-            <div className="text-sm font-bold text-emerald-400 mt-0.5">
+            <div className="text-sm font-extrabold text-emerald-400 mt-0.5">
               {totalFormatted.formatted}
             </div>
             {totalFormatted.daysSubtitle && (
@@ -395,9 +347,9 @@ export function XayoStatsTab({
 
           <div className="p-2.5 bg-[#202025] border border-zinc-800/90 rounded-xl">
             <span className="text-[10px] text-zinc-400 block font-medium">
-              {lang === 'pl' ? 'Oglądane kanały' : 'Tracked streamers'}
+              {lang === 'pl' ? 'Oglądane kanały' : 'Tracked creators'}
             </span>
-            <div className="text-sm font-bold text-purple-400 mt-0.5">
+            <div className="text-sm font-extrabold text-purple-400 mt-0.5">
               {entries.length} {lang === 'pl' ? 'twórców' : 'creators'}
             </div>
             {topStreamer && (
@@ -411,30 +363,28 @@ export function XayoStatsTab({
 
       {/* Filter and Sort Toolbar */}
       {entries.length > 0 && (
-        <div className="space-y-2 pt-1">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="w-3 h-3 absolute left-2.5 top-2.5 text-zinc-500" />
-              <input
-                type="text"
-                value={filterQuery}
-                onChange={(e) => setFilterQuery(e.target.value)}
-                placeholder={lang === 'pl' ? 'Filtruj streamerów...' : 'Filter streamers...'}
-                className="w-full bg-[#18181b] border border-zinc-800 rounded-lg pl-7 pr-2.5 py-1.5 text-[11px] text-white placeholder-zinc-500 focus:outline-hidden focus:border-purple-500"
-              />
-            </div>
-
-            <select
-              value={sortField}
-              onChange={(e) => setSortField(e.target.value as SortField)}
-              className="bg-[#18181b] border border-zinc-800 rounded-lg px-2 py-1.5 text-[11px] text-zinc-300 focus:outline-hidden focus:border-purple-500 cursor-pointer"
-            >
-              <option value="time">{lang === 'pl' ? 'Czas: Najwięcej' : 'Watch time: Highest'}</option>
-              <option value="lastSeen">{lang === 'pl' ? 'Ostatnio widziany' : 'Last seen'}</option>
-              <option value="followed">{lang === 'pl' ? 'Najdłużej obserwowany' : 'Longest followed'}</option>
-              <option value="alpha">{lang === 'pl' ? 'Alfabetycznie (A-Z)' : 'Alphabetical'}</option>
-            </select>
+        <div className="flex gap-1.5 pt-0.5">
+          <div className="relative flex-1 min-w-0">
+            <Search className="w-3 h-3 absolute left-2.5 top-2.5 text-zinc-500" />
+            <input
+              type="text"
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              placeholder={lang === 'pl' ? 'Filtruj listę...' : 'Filter list...'}
+              className="w-full bg-[#18181b] border border-zinc-800 rounded-lg pl-7 pr-2 py-1.5 text-[11px] text-white placeholder-zinc-500 focus:outline-hidden focus:border-purple-500"
+            />
           </div>
+
+          <select
+            value={sortField}
+            onChange={(e) => setSortField(e.target.value as SortField)}
+            className="bg-[#18181b] border border-zinc-800 rounded-lg px-2 py-1 text-[11px] text-zinc-300 focus:outline-hidden focus:border-purple-500 cursor-pointer shrink-0"
+          >
+            <option value="time">{lang === 'pl' ? 'Czas: Max' : 'Time: Max'}</option>
+            <option value="lastSeen">{lang === 'pl' ? 'Ostatnio widziany' : 'Last seen'}</option>
+            <option value="followed">{lang === 'pl' ? 'Staż follow' : 'Follow duration'}</option>
+            <option value="alpha">{lang === 'pl' ? 'A-Z' : 'A-Z'}</option>
+          </select>
         </div>
       )}
 
@@ -444,8 +394,8 @@ export function XayoStatsTab({
           <RotateCcw className="w-6 h-6 animate-spin text-purple-400 mx-auto" />
           <p className="text-zinc-400 text-xs">
             {lang === 'pl'
-              ? `Pobieranie statystyk xayo.pl dla ${analyzedUser}...`
-              : `Loading xayo.pl stats for ${analyzedUser}...`}
+              ? `Pobieranie statystyk xayo.pl dla "${analyzedUser}"...`
+              : `Loading xayo.pl stats for "${analyzedUser}"...`}
           </p>
         </div>
       )}
@@ -456,40 +406,69 @@ export function XayoStatsTab({
           <p className="text-red-300 font-semibold text-xs">{errorMessage}</p>
           <p className="text-[11px] text-zinc-400">
             {lang === 'pl'
-              ? 'Sprawdź czy nick jest poprawny lub spróbuj wpisać innego użytkownika.'
+              ? 'Sprawdź poprawność nicku lub wpisz innego użytkownika.'
               : 'Verify the username or try another chatter.'}
           </p>
         </div>
       )}
 
-      {/* Empty State */}
-      {!isLoading && !errorMessage && entries.length === 0 && (
+      {/* Welcome State when no user is entered/logged in */}
+      {!analyzedUser && !isLoading && (
+        <div className="p-6 text-center space-y-3 bg-[#1e1e24] rounded-xl border border-zinc-800">
+          <div className="w-10 h-10 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40 flex items-center justify-center mx-auto">
+            <User className="w-5 h-5" />
+          </div>
+          <div>
+            <h4 className="text-sm font-bold text-white">
+              {lang === 'pl' ? 'Wpisz swój nick z Twitcha' : 'Enter your Twitch username'}
+            </h4>
+            <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto">
+              {lang === 'pl'
+                ? 'Wpisz powyżej swój nick (lub zaloguj się przez Twitch), aby automatycznie sprawdzić statystyki Twojego czasu oglądania streamerów z bazy xayo.pl.'
+                : 'Enter your Twitch username above or log in to view your watch time analytics from xayo.pl.'}
+            </p>
+          </div>
+          {onLogin && !currentUser && (
+            <button
+              onClick={onLogin}
+              className="px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors cursor-pointer"
+            >
+              {lang === 'pl' ? 'Zaloguj się przez Twitch' : 'Log in with Twitch'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Empty State when user has 0 records */}
+      {!isLoading && !errorMessage && analyzedUser && entries.length === 0 && (
         <div className="p-6 text-center text-zinc-500 space-y-2 bg-[#202025] rounded-xl border border-zinc-800">
           <Clock className="w-8 h-8 text-zinc-600 mx-auto" />
           <p className="text-xs font-semibold text-zinc-300">
-            {lang === 'pl' ? 'Brak danych w wybranym okresie' : 'No records found for this period'}
+            {lang === 'pl'
+              ? `Brak danych dla "${analyzedUser}" w wybranym okresie`
+              : `No records found for "${analyzedUser}" in this period`}
           </p>
           <p className="text-[11px] text-zinc-500">
             {lang === 'pl'
-              ? `Użytkownik "${analyzedUser}" może nie mieć zarejestrowanych minut na polskim Twitchu w tym zakresie.`
-              : `User "${analyzedUser}" might not have recorded minutes on Polish Twitch.`}
+              ? 'Upewnij się, że nick jest poprawny lub wybierz okres "Cały czas".'
+              : 'Verify the username or select "All time".'}
           </p>
         </div>
       )}
 
-      {/* Streamers List */}
+      {/* Streamers List with 2-Tier Clean Layout (No Overlapping Buttons!) */}
       {!isLoading && processedEntries.length > 0 && (
         <div className="space-y-1.5 flex-1">
           <div className="flex items-center justify-between text-[11px] text-zinc-400 px-1 font-medium">
             <span>
-              {lang === 'pl' ? 'Ranking kanałów' : 'Streamer ranking'} ({processedEntries.length})
+              {lang === 'pl' ? 'Twórcy' : 'Creators'} ({processedEntries.length})
             </span>
             <span className="text-[10px] text-zinc-500">
-              {lang === 'pl' ? 'Kliknij, aby włączyć stream' : 'Click to watch'}
+              {lang === 'pl' ? 'Ranking oglądalności' : 'Ranking'}
             </span>
           </div>
 
-          <ul className="space-y-1.5">
+          <ul className="space-y-2">
             {processedEntries.map((item, idx) => {
               const lowerName = item.streamerName.toLowerCase();
               const isWatching = activeSet.has(lowerName);
@@ -503,43 +482,40 @@ export function XayoStatsTab({
               const percentageOfTotal =
                 totalMinutes > 0 ? ((item.minutes / totalMinutes) * 100).toFixed(1) : '0';
 
-              // Rank styling
               let rankBadgeClass = 'bg-zinc-800 text-zinc-400';
-              if (idx === 0) rankBadgeClass = 'bg-amber-500 text-black font-bold';
-              else if (idx === 1) rankBadgeClass = 'bg-slate-300 text-black font-bold';
-              else if (idx === 2) rankBadgeClass = 'bg-amber-700 text-white font-bold';
+              if (idx === 0) rankBadgeClass = 'bg-amber-500 text-black font-extrabold';
+              else if (idx === 1) rankBadgeClass = 'bg-slate-300 text-black font-extrabold';
+              else if (idx === 2) rankBadgeClass = 'bg-amber-700 text-white font-extrabold';
 
               return (
                 <li
                   key={lowerName}
-                  className={`p-2.5 rounded-xl border transition-all relative overflow-hidden group select-none ${
+                  className={`p-2.5 rounded-xl border transition-all relative overflow-hidden flex flex-col gap-2 ${
                     isWatching
-                      ? 'bg-purple-950/40 border-purple-600/70 shadow-sm'
-                      : 'bg-[#202025] hover:bg-[#27272e] border-zinc-800/80 hover:border-zinc-700'
+                      ? 'bg-purple-950/40 border-purple-500/80 shadow-md'
+                      : 'bg-[#1e1e24] hover:bg-[#25252e] border-zinc-800'
                   }`}
                 >
-                  {/* Subtle progress bar in background */}
+                  {/* Background progress bar indicator */}
                   <div
                     className="absolute inset-y-0 left-0 bg-purple-600/10 pointer-events-none transition-all duration-300"
                     style={{ width: `${percentageOfMax}%` }}
                   />
 
+                  {/* TIER 1: Streamer Identity & Total Time */}
                   <div className="relative flex items-center justify-between gap-2">
-                    {/* Left: Rank, Avatar, Name & Follow duration */}
-                    <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
                       {/* Rank # */}
-                      <span
-                        className={`w-5 h-5 rounded-md text-[10px] flex items-center justify-center shrink-0 ${rankBadgeClass}`}
-                      >
-                        {idx + 1}
+                      <span className={`w-5 h-5 rounded text-[10px] flex items-center justify-center shrink-0 ${rankBadgeClass}`}>
+                        #{idx + 1}
                       </span>
 
-                      {/* Streamer Avatar */}
+                      {/* Avatar */}
                       <div className="relative shrink-0">
                         <img
                           src={item.avatarUrl || 'https://static-cdn.jtvnw.net/user-default-pictures-uv/cdd517eb-aca7-43a6-8fc7-e9a8f4c3a501-profile_image-300x300.png'}
                           alt={item.streamerName}
-                          className="w-9 h-9 rounded-full object-cover border border-zinc-700/80 bg-zinc-800"
+                          className="w-8 h-8 rounded-full object-cover border border-zinc-700 bg-zinc-800"
                           onError={(e) => {
                             (e.target as HTMLImageElement).src =
                               'https://static-cdn.jtvnw.net/user-default-pictures-uv/cdd517eb-aca7-43a6-8fc7-e9a8f4c3a501-profile_image-300x300.png';
@@ -547,77 +523,73 @@ export function XayoStatsTab({
                         />
                         {live && (
                           <span
-                            className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-red-600 border-2 border-[#202025] rounded-full animate-pulse"
+                            className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-red-600 border border-[#18181b] rounded-full animate-pulse"
                             title="Live"
                           />
                         )}
                       </div>
 
-                      {/* Names & Follow status */}
+                      {/* Streamer Name & Live Badge */}
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-white text-xs truncate capitalize">
+                          <span className="font-extrabold text-white text-xs truncate capitalize">
                             {item.streamerName}
                           </span>
                           {live && (
-                            <span className="text-[9px] px-1 bg-red-600 text-white font-semibold rounded uppercase">
+                            <span className="text-[9px] px-1 py-0.2 bg-red-600/90 text-white font-bold rounded uppercase">
                               Live
                             </span>
                           )}
                         </div>
-
-                        {/* Followed at badge (from Twitch API) */}
-                        {followData ? (
-                          <div
-                            className="flex items-center gap-1 text-[10px] text-purple-300 font-medium truncate mt-0.5"
-                            title={`Obserwujesz od ${followData.dateFormatted} (${followData.daysAgo} dni temu)`}
-                          >
-                            <Heart className="w-2.5 h-2.5 fill-purple-400 text-purple-400 shrink-0" />
-                            <span>
-                              {lang === 'pl' ? `Od: ${followData.durationText}` : `Followed: ${followData.durationText}`}
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="text-[10px] text-zinc-500 truncate mt-0.5 flex items-center gap-1">
-                            <span>{lang === 'pl' ? 'Ostatnio:' : 'Seen:'}</span>
-                            <span className="text-zinc-400">{lastSeenText}</span>
-                          </div>
-                        )}
                       </div>
                     </div>
 
-                    {/* Right: Watch Time & Actions */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      <div className="text-right">
-                        <div className="font-bold text-zinc-100 text-xs">
-                          {timeStats.formatted}
-                        </div>
-                        <div className="text-[10px] text-zinc-400">
-                          {percentageOfTotal}% {lang === 'pl' ? 'czasu' : 'of total'}
-                        </div>
+                    {/* Time Stat */}
+                    <div className="text-right shrink-0">
+                      <div className="font-extrabold text-emerald-400 text-xs">
+                        {timeStats.formatted}
                       </div>
+                      <div className="text-[10px] text-zinc-400">
+                        {percentageOfTotal}% {lang === 'pl' ? 'czasu' : 'of total'}
+                      </div>
+                    </div>
+                  </div>
 
-                      {/* Moderator Panel (Mod View) Button */}
+                  {/* TIER 2: Follow Info & Action Buttons (Separated, No Collisions!) */}
+                  <div className="relative flex items-center justify-between gap-2 pt-1 border-t border-zinc-800/60 text-[11px]">
+                    {/* Left: Follow badge or last active text */}
+                    <div className="min-w-0 flex-1 truncate">
+                      {followData ? (
+                        <div
+                          className="flex items-center gap-1 text-[10px] text-purple-300 font-medium truncate"
+                          title={`Zaobserwowano ${followData.dateFormatted}`}
+                        >
+                          <Heart className="w-3 h-3 fill-purple-400 text-purple-400 shrink-0" />
+                          <span className="truncate">
+                            {lang === 'pl' ? `Od: ${followData.durationText}` : `Follow: ${followData.durationText}`}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-zinc-500 truncate block">
+                          {lang === 'pl' ? 'Ostatnio:' : 'Seen:'} {lastSeenText}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Right: Mod View & Watch Buttons */}
+                    <div className="flex items-center gap-1.5 shrink-0">
                       {isModerator && (
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openTwitchModView(lowerName);
-                          }}
-                          title={
-                            lang === 'pl'
-                              ? `Włącz Panel Moderatora dla ${item.streamerName}`
-                              : `Open Mod View for ${item.streamerName}`
-                          }
-                          className="p-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 hover:text-white transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                          onClick={() => onOpenModView ? onOpenModView(lowerName) : null}
+                          title={lang === 'pl' ? `Włącz Panel Moderatora dla ${item.streamerName}` : `Open Mod View for ${item.streamerName}`}
+                          className="px-2 py-1 rounded-lg text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 hover:text-white transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                         >
-                          <Shield className="w-3.5 h-3.5 text-amber-400" />
-                          <span className="hidden sm:inline">{lang === 'pl' ? 'Mod' : 'Mod'}</span>
+                          <Shield className="w-3 h-3 text-amber-400" />
+                          <span>Mod</span>
                         </button>
                       )}
 
-                      {/* Add/Remove to Multi-Viewer button */}
                       <button
                         onClick={() => {
                           if (isWatching) {
@@ -626,41 +598,26 @@ export function XayoStatsTab({
                             onAddChannel(lowerName);
                           }
                         }}
-                        title={
-                          isWatching
-                            ? lang === 'pl'
-                              ? 'Usuń z widoku'
-                              : 'Remove from grid'
-                            : lang === 'pl'
-                            ? 'Włącz w Multi Viewerze'
-                            : 'Watch in Multi Viewer'
-                        }
-                        className={`p-1.5 rounded-lg text-xs font-semibold flex items-center justify-center transition-colors ${
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer shrink-0 ${
                           isWatching
                             ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
                             : 'bg-purple-600 hover:bg-purple-500 text-white shadow-xs'
                         }`}
                       >
                         {isWatching ? (
-                          <Check className="w-3.5 h-3.5 text-purple-300" />
+                          <>
+                            <Check className="w-3 h-3 text-purple-300" />
+                            <span>{lang === 'pl' ? 'W siatce' : 'In Grid'}</span>
+                          </>
                         ) : (
-                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <>
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>{lang === 'pl' ? 'Oglądaj' : 'Watch'}</span>
+                          </>
                         )}
                       </button>
                     </div>
                   </div>
-
-                  {/* Secondary detail row when hovered */}
-                  {followData && (
-                    <div className="mt-1.5 pt-1 border-t border-zinc-800/60 flex items-center justify-between text-[10px] text-zinc-500">
-                      <span className="truncate">
-                        {lang === 'pl' ? 'Zaobserwowano:' : 'Follow date:'} {followData.dateFormatted}
-                      </span>
-                      <span className="shrink-0 text-zinc-400">
-                        {lang === 'pl' ? 'Aktywność:' : 'Last active:'} {lastSeenText}
-                      </span>
-                    </div>
-                  )}
                 </li>
               );
             })}
@@ -670,20 +627,20 @@ export function XayoStatsTab({
 
       {/* Export Action Buttons */}
       {entries.length > 0 && (
-        <div className="pt-2 border-t border-zinc-800 flex gap-2">
+        <div className="pt-1.5 border-t border-zinc-800 flex gap-2">
           <button
             onClick={() => handleExport('csv')}
             className="flex-1 py-1.5 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
           >
             <Download className="w-3 h-3" />
-            <span>Eksport CSV</span>
+            <span>CSV</span>
           </button>
           <button
             onClick={() => handleExport('json')}
             className="flex-1 py-1.5 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
           >
             <Download className="w-3 h-3" />
-            <span>Eksport JSON</span>
+            <span>JSON</span>
           </button>
         </div>
       )}

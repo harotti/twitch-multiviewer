@@ -45,6 +45,7 @@ interface XayoModalProps {
   activeChannels: string[];
   onAddChannel: (channel: string) => void;
   onRemoveChannel: (channel: string) => void;
+  onOpenModView?: (channel: string) => void;
   lang?: 'pl' | 'en';
 }
 
@@ -91,11 +92,12 @@ export function XayoModal({
   activeChannels,
   onAddChannel,
   onRemoveChannel,
+  onOpenModView,
   lang = 'pl',
 }: XayoModalProps) {
   const [activeTab, setActiveTab] = useState<ModalTab>('trending');
   const [analyzedUser, setAnalyzedUser] = useState<string>(() => {
-    return currentUser?.login || 'hattoripol';
+    return currentUser?.login || localStorage.getItem('xayo_analyzed_user') || '';
   });
   const [userInput, setUserInput] = useState<string>(analyzedUser);
   const [period, setPeriod] = useState<XayoPeriod>('all');
@@ -108,12 +110,19 @@ export function XayoModal({
 
   useEffect(() => {
     if (isOpen) {
-      if (currentUser?.login && analyzedUser === 'hattoripol') {
+      if (currentUser?.login) {
         setAnalyzedUser(currentUser.login);
         setUserInput(currentUser.login);
+        localStorage.setItem('xayo_analyzed_user', currentUser.login);
+      } else {
+        const saved = localStorage.getItem('xayo_analyzed_user');
+        if (saved && !analyzedUser) {
+          setAnalyzedUser(saved);
+          setUserInput(saved);
+        }
       }
     }
-  }, [isOpen, currentUser]);
+  }, [isOpen, currentUser?.login]);
 
   const followedMap = useMemo(() => {
     const map = new Map<string, TwitchChannelInfo>();
@@ -133,7 +142,12 @@ export function XayoModal({
 
   const loadData = async (userToFetch: string, selectedPeriod: XayoPeriod) => {
     const clean = userToFetch.trim().toLowerCase();
-    if (!clean) return;
+    if (!clean) {
+      setEntries([]);
+      setIsLoading(false);
+      setErrorMessage(null);
+      return;
+    }
 
     setIsLoading(true);
     setErrorMessage(null);
@@ -316,6 +330,7 @@ export function XayoModal({
     const clean = userInput.trim().toLowerCase();
     if (!clean) return;
     setAnalyzedUser(clean);
+    localStorage.setItem('xayo_analyzed_user', clean);
   };
 
   const totalMinutes = entries.reduce((acc, curr) => acc + (curr.minutes || 0), 0);
@@ -425,12 +440,12 @@ export function XayoModal({
 
           <div className="flex items-center gap-2">
             <a
-              href={`https://xayo.pl/${analyzedUser}`}
+              href={analyzedUser ? `https://xayo.pl/${encodeURIComponent(analyzedUser)}` : 'https://xayo.pl'}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs px-3 py-1.5 rounded-lg bg-[#141416] hover:bg-zinc-800 border border-zinc-700 text-purple-300 hover:text-purple-200 transition-colors flex items-center gap-1.5 font-medium"
             >
-              <span>xayo.pl/{analyzedUser}</span>
+              <span>{analyzedUser ? `xayo.pl/${analyzedUser}` : 'xayo.pl'}</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
             <button
@@ -468,7 +483,7 @@ export function XayoModal({
             }`}
           >
             <BarChart3 className="w-4 h-4 text-purple-400" />
-            <span>{lang === 'pl' ? `📊 Statystyki Chattera: ${analyzedUser}` : `📊 Chatter Stats: ${analyzedUser}`}</span>
+            <span>{lang === 'pl' ? (analyzedUser ? `📊 Statystyki Chattera: ${analyzedUser}` : '📊 Statystyki Czasu Oglądania') : (analyzedUser ? `📊 Chatter Stats: ${analyzedUser}` : '📊 Watch Time Stats')}</span>
           </button>
         </div>
 
@@ -598,9 +613,16 @@ export function XayoModal({
                     {spotlightTrending.isModerator && (
                       <button
                         type="button"
-                        onClick={() => openTwitchModView(spotlightTrending.channel)}
+                        onClick={() => {
+                          if (onOpenModView) {
+                            onClose();
+                            onOpenModView(spotlightTrending.channel);
+                          } else {
+                            openTwitchModView(spotlightTrending.channel);
+                          }
+                        }}
                         className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-md shadow-amber-950/60 cursor-pointer"
-                        title={lang === 'pl' ? 'Otwórz dedykowany Panel Moderatora' : 'Open Twitch Mod View'}
+                        title={lang === 'pl' ? 'Włącz Panel Moderatora' : 'Open Mod View'}
                       >
                         <Shield className="w-4 h-4 text-black" />
                         <span>{lang === 'pl' ? 'Włącz Panel Moderatora' : 'Launch Mod View'}</span>
@@ -793,7 +815,14 @@ export function XayoModal({
                       {isMod && (
                         <button
                           type="button"
-                          onClick={() => openTwitchModView(item.channel)}
+                          onClick={() => {
+                            if (onOpenModView) {
+                              onClose();
+                              onOpenModView(item.channel);
+                            } else {
+                              openTwitchModView(item.channel);
+                            }
+                          }}
                           title={lang === 'pl' ? `Włącz Panel Moderatora dla ${item.displayName}` : `Open Mod View for ${item.displayName}`}
                           className="flex-1 py-1.5 px-2 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 hover:text-white rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer"
                         >
@@ -874,26 +903,14 @@ export function XayoModal({
                 </button>
               </form>
 
-              {/* Quick presets */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => {
-                    setAnalyzedUser('hattoripol');
-                    setUserInput('hattoripol');
-                  }}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                    analyzedUser === 'hattoripol'
-                      ? 'bg-purple-600 text-white font-bold'
-                      : 'bg-zinc-800 text-zinc-300 hover:text-white'
-                  }`}
-                >
-                  hattoripol
-                </button>
-                {currentUser?.login && currentUser.login !== 'hattoripol' && (
+              {/* Logged in user shortcut */}
+              {currentUser?.login && (
+                <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => {
                       setAnalyzedUser(currentUser.login);
                       setUserInput(currentUser.login);
+                      localStorage.setItem('xayo_analyzed_user', currentUser.login);
                     }}
                     className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
                       analyzedUser === currentUser.login
@@ -903,8 +920,8 @@ export function XayoModal({
                   >
                     Twój profil ({currentUser.login})
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Period selector */}
               <div className="flex bg-[#202025] p-1 rounded-lg border border-zinc-800 text-xs">
@@ -1033,7 +1050,23 @@ export function XayoModal({
 
             {/* Table Area */}
             <div className="flex-1 overflow-y-auto p-5">
-              {isLoading ? (
+              {!analyzedUser && !isLoading ? (
+                <div className="h-64 flex flex-col items-center justify-center text-center space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40 flex items-center justify-center">
+                    <User className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-white">
+                      {lang === 'pl' ? 'Wpisz nick z Twitcha' : 'Enter a Twitch username'}
+                    </h4>
+                    <p className="text-xs text-zinc-400 mt-1 max-w-sm">
+                      {lang === 'pl'
+                        ? 'Wpisz powyżej nick z Twitcha lub zaloguj się, aby pobrać pełne statystyki czasu oglądania z bazy xayo.pl.'
+                        : 'Enter a Twitch username above or log in to view watch time analytics from xayo.pl.'}
+                    </p>
+                  </div>
+                </div>
+              ) : isLoading ? (
                 <div className="h-64 flex flex-col items-center justify-center space-y-3">
                   <RotateCcw className="w-8 h-8 animate-spin text-purple-400" />
                   <p className="text-zinc-400 text-sm">
@@ -1175,7 +1208,12 @@ export function XayoModal({
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openTwitchModView(lower);
+                                if (onOpenModView) {
+                                  onClose();
+                                  onOpenModView(lower);
+                                } else {
+                                  openTwitchModView(lower);
+                                }
                               }}
                               title={lang === 'pl' ? `Panel moderatora: ${item.streamerName}` : `Mod View: ${item.streamerName}`}
                               className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 hover:text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"

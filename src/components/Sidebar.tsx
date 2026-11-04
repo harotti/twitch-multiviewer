@@ -50,6 +50,7 @@ interface SidebarProps {
   onLoadPreset: (preset: StreamPreset) => void;
   onDeletePreset: (id: string) => void;
   onOpenSettings: () => void;
+  onOpenModView?: (channel: string) => void;
   isLoadingData: boolean;
   onRefreshChannels: () => void;
   lang?: 'pl' | 'en';
@@ -78,6 +79,7 @@ export function Sidebar({
   onLoadPreset,
   onDeletePreset,
   onOpenSettings,
+  onOpenModView,
   isLoadingData,
   onRefreshChannels,
   lang = 'pl',
@@ -139,8 +141,8 @@ export function Sidebar({
 
       {/* Main Sidebar Shell */}
       <aside
-        className={`fixed lg:static top-0 left-0 bottom-0 z-40 w-80 bg-[#18181b] border-r border-[#27272a] flex flex-col transition-all duration-300 ease-in-out ${
-          isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-80'
+        className={`fixed lg:static top-0 left-0 bottom-0 z-40 w-84 sm:w-[350px] lg:w-[350px] bg-[#18181b] border-r border-[#27272a] flex flex-col transition-all duration-300 ease-in-out shrink-0 ${
+          isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-[350px]'
         } ${!isOpen ? 'lg:hidden' : ''}`}
       >
         {/* App Title & Auth Bar */}
@@ -359,16 +361,20 @@ export function Sidebar({
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              openTwitchModView(ch.broadcaster_login);
+                              if (onOpenModView) {
+                                onOpenModView(ch.broadcaster_login);
+                              } else {
+                                openTwitchModView(ch.broadcaster_login);
+                              }
                             }}
                             title={
                               lang === 'pl'
-                                ? `Włącz Panel Moderatora (Mod View) dla ${ch.broadcaster_name}`
+                                ? `Włącz Panel Moderatora dla ${ch.broadcaster_name}`
                                 : `Open Moderator View for ${ch.broadcaster_name}`
                             }
-                            className="text-xs px-2 py-1 rounded font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
+                            className="text-xs px-2 py-1 rounded-lg font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer shrink-0"
                           >
-                            <Shield className="w-3 h-3 text-amber-400" />
+                            <Shield className="w-3.5 h-3.5 text-amber-400" />
                             <span>{lang === 'pl' ? 'Panel mod.' : 'Mod View'}</span>
                           </button>
 
@@ -517,6 +523,8 @@ export function Sidebar({
             activeChannels={activeChannels}
             onAddChannel={onAddChannel}
             onRemoveChannel={onRemoveChannel}
+            onOpenModView={onOpenModView}
+            onLogin={onLogin}
             lang={lang}
           />
         )}

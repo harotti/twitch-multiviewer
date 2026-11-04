@@ -22,6 +22,7 @@ import { StreamGrid } from './components/StreamGrid';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginModal } from './components/LoginModal';
 import { XayoModal } from './components/XayoModal';
+import { ModPanelDrawer } from './components/ModPanelDrawer';
 import { AlertCircle, CheckCircle2, X } from 'lucide-react';
 
 const PRESETS_STORAGE_KEY = 'twitch_stream_presets_v1';
@@ -75,6 +76,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const [xayoModalOpen, setXayoModalOpen] = useState<boolean>(false);
+  const [modPanelChannel, setModPanelChannel] = useState<string | null>(null);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -333,6 +335,7 @@ export default function App() {
         onLoadPreset={handleLoadPreset}
         onDeletePreset={handleDeletePreset}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenModView={(ch) => setModPanelChannel(ch.toLowerCase())}
         isLoadingData={isLoadingData}
         onRefreshChannels={() => token && loadTwitchData(token)}
         lang={lang}
@@ -410,6 +413,7 @@ export default function App() {
             onToggleTheater={handleToggleTheater}
             onCloseStream={handleRemoveChannel}
             onAddChannel={handleAddChannel}
+            onOpenModView={(ch) => setModPanelChannel(ch.toLowerCase())}
             lang={lang}
           />
         </main>
@@ -442,6 +446,17 @@ export default function App() {
         activeChannels={activeChannels}
         onAddChannel={handleAddChannel}
         onRemoveChannel={handleRemoveChannel}
+        onOpenModView={(ch) => setModPanelChannel(ch.toLowerCase())}
+        lang={lang}
+      />
+
+      {/* In-App Twitch Moderator Panel Drawer */}
+      <ModPanelDrawer
+        channel={modPanelChannel}
+        onClose={() => setModPanelChannel(null)}
+        moderatedChannels={moderatedChannels}
+        liveStreams={liveStreams}
+        onSelectChannel={(ch) => setModPanelChannel(ch.toLowerCase())}
         lang={lang}
       />
     </div>

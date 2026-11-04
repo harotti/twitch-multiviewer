@@ -26,6 +26,7 @@ interface StreamPlayerProps {
   isTheater?: boolean;
   onToggleTheater?: (channel: string) => void;
   onClose: (channel: string) => void;
+  onOpenModView?: (channel: string) => void;
   lang?: 'pl' | 'en';
 }
 
@@ -40,6 +41,7 @@ export function StreamPlayer({
   isTheater,
   onToggleTheater,
   onClose,
+  onOpenModView,
   lang = 'pl',
 }: StreamPlayerProps) {
   const [showChat, setShowChat] = useState<boolean>(false);
@@ -140,61 +142,61 @@ export function StreamPlayer({
       }`}
     >
       {/* Stream Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-[#1f1f23] border-b border-[#2d2d34] select-none text-xs">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse" />
+      <div className="flex items-center justify-between px-2.5 py-1.5 bg-[#1f1f23] border-b border-[#2d2d34] select-none text-xs gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
             <a
               href={`https://twitch.tv/${channel}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="font-bold text-sm text-white hover:text-purple-400 transition-colors truncate flex items-center gap-1"
+              className="font-extrabold text-xs text-white hover:text-purple-400 transition-colors truncate max-w-[120px] sm:max-w-[160px] flex items-center gap-1"
               title={`${lang === 'pl' ? 'Otwórz na Twitchu' : 'Open on Twitch'}: ${channel}`}
             >
-              {channel}
-              <ExternalLink className="w-3 h-3 text-zinc-500 hover:text-zinc-300" />
+              <span className="truncate">{channel}</span>
+              <ExternalLink className="w-3 h-3 text-zinc-500 hover:text-zinc-300 shrink-0" />
             </a>
           </div>
 
           {isLive && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-600/90 text-white uppercase tracking-wider">
-              <Radio className="w-2.5 h-2.5 animate-ping" />
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-600/90 text-white uppercase tracking-wider shrink-0">
+              <Radio className="w-2 h-2 animate-ping" />
               LIVE
-            </span>
-          )}
-
-          {viewerCount !== undefined && viewerCount > 0 && (
-            <span className="text-[11px] text-zinc-400 hidden sm:inline-block">
-              {viewerCount.toLocaleString()} {lang === 'pl' ? 'widzów' : 'viewers'}
-            </span>
-          )}
-
-          {gameName && (
-            <span className="hidden md:inline-block text-[11px] text-zinc-400 truncate max-w-[120px] bg-[#27272a] px-1.5 py-0.5 rounded">
-              {gameName}
             </span>
           )}
 
           {isModerator && (
             <button
-              onClick={() => openTwitchModView(channel)}
+              onClick={() => onOpenModView ? onOpenModView(channel) : openTwitchModView(channel)}
               title={lang === 'pl' ? `Panel moderatora: ${channel}` : `Mod View: ${channel}`}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/25 hover:bg-amber-500/40 border border-amber-500/50 text-amber-300 hover:text-white transition-colors text-[10px] font-bold cursor-pointer"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/25 hover:bg-amber-500/40 border border-amber-500/50 text-amber-300 hover:text-white transition-colors text-[10px] font-bold cursor-pointer shrink-0"
             >
               <Shield className="w-3 h-3 text-amber-400" />
-              <span>Mod View</span>
+              <span>Mod</span>
             </button>
+          )}
+
+          {viewerCount !== undefined && viewerCount > 0 && (
+            <span className="text-[10px] text-zinc-400 hidden xl:inline-block shrink-0">
+              {viewerCount.toLocaleString()} {lang === 'pl' ? 'widzów' : 'viewers'}
+            </span>
+          )}
+
+          {gameName && (
+            <span className="hidden 2xl:inline-block text-[10px] text-zinc-400 truncate max-w-[100px] bg-[#27272a] px-1.5 py-0.5 rounded shrink-0">
+              {gameName}
+            </span>
           )}
         </div>
 
         {/* Action Controls & Watch Time */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
           {/* Watch Time Badge */}
           <div
-            className="flex items-center gap-1 bg-zinc-800/90 border border-zinc-700/60 px-2 py-0.5 rounded text-[11px] text-purple-300 font-medium"
+            className="hidden sm:flex items-center gap-1 bg-zinc-800/90 border border-zinc-700/60 px-1.5 py-0.5 rounded text-[10px] text-purple-300 font-medium shrink-0"
             title={`${lang === 'pl' ? 'Czas w tej sesji / Łącznie' : 'Session time / Total time'}`}
           >
-            <Clock className="w-3 h-3 text-purple-400" />
+            <Clock className="w-3 h-3 text-purple-400 shrink-0" />
             <span>{sessionTimeStr}</span>
             <span className="text-zinc-500">|</span>
             <span className="text-zinc-300">{totalTimeStr}</span>

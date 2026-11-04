@@ -14,6 +14,7 @@ interface StreamGridProps {
   onToggleTheater: (channel: string) => void;
   onCloseStream: (channel: string) => void;
   onAddChannel: (channel: string) => void;
+  onOpenModView?: (channel: string) => void;
   lang?: 'pl' | 'en';
 }
 
@@ -39,6 +40,7 @@ export function StreamGrid({
   onToggleTheater,
   onCloseStream,
   onAddChannel,
+  onOpenModView,
   lang = 'pl',
 }: StreamGridProps) {
   if (activeChannels.length === 0) {
@@ -138,6 +140,7 @@ export function StreamGrid({
               isTheater={isTheater}
               onToggleTheater={onToggleTheater}
               onClose={onCloseStream}
+              onOpenModView={onOpenModView}
               lang={lang}
             />
           );

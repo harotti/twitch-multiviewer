@@ -62,7 +62,7 @@ export function Navbar({
   };
 
   return (
-    <header className="h-14 bg-[#18181b] border-b border-[#27272a] px-3 sm:px-4 flex items-center justify-between gap-2 shrink-0 select-none">
+    <header className="h-14 bg-[#18181b] border-b border-[#27272a] px-3 sm:px-4 flex items-center justify-between gap-2 shrink-0 select-none relative z-40">
       {/* Left section: toggle sidebar + logo */}
       <div className="flex items-center gap-2">
         <button
