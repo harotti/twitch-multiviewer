@@ -1,0 +1,6 @@
+{
+  "name": "Twitch Multi Viewer & Time Tracker",
+  "description": "Multi-stream Twitch player and real-time watch time tracking application with channel management, moderated and followed feeds, and custom grid layouts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
