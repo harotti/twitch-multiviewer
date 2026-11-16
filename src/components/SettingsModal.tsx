@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Check, Key, Shield, HelpCircle, RotateCcw, Copy, PlayCircle } from 'lucide-react';
-import { DEFAULT_CLIENT_ID, getEffectiveClientId, getRedirectUri } from '../services/twitchApi';
+import { DEFAULT_CLIENT_ID, getOAuthClientId, getRedirectUri } from '../services/twitchApi';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -28,7 +28,7 @@ export function SettingsModal({
 
   useEffect(() => {
     if (isOpen) {
-      setClientId(getEffectiveClientId());
+      setClientId(getOAuthClientId());
       setRedirectUri(getRedirectUri());
       setCustomToken(localStorage.getItem('twitch_token') || '');
       const savedAutoPlay = localStorage.getItem('twitch_global_autoplay');
@@ -211,13 +211,17 @@ export function SettingsModal({
               type="text"
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
-              placeholder="np. vch0e4gq78sqrbnfvy3zs2yb2mw5jy"
+              placeholder={
+                lang === 'pl'
+                  ? 'Wklej własny Client ID z dev.twitch.tv'
+                  : 'Paste your Client ID from dev.twitch.tv'
+              }
               className="w-full bg-[#101012] border border-zinc-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-hidden focus:border-purple-500"
             />
             <p className="text-[11px] text-zinc-500">
               {lang === 'pl'
-                ? 'Domyślny Client ID pochodzi z zaimportowanego projektu. Możesz także podać własny z Twitch Developer Console.'
-                : 'Default Client ID comes from the imported project or you can specify your own.'}
+                ? 'Opcjonalne — wymagane wyłącznie dla logowania przez Okno OAuth (Popup). Wpisz Client ID własnej aplikacji z Twitch Developer Console.'
+                : 'Optional — only needed for OAuth Popup login. Enter your own app Client ID from Twitch Developer Console.'}
             </p>
           </div>
 

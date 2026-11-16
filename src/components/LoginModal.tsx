@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Key,
@@ -15,9 +15,8 @@ import {
 import {
   validateTwitchToken,
   buildTwitchAuthUrl,
-  getEffectiveClientId,
+  getOAuthClientId,
   getRedirectUri,
-  DEFAULT_CLIENT_ID,
 } from '../services/twitchApi';
 
 interface LoginModalProps {
@@ -34,16 +33,44 @@ export function LoginModal({
   lang = 'pl',
 }: LoginModalProps) {
   const [tokenInput, setTokenInput] = useState('');
+  const [oauthClientId, setOauthClientId] = useState(() => getOAuthClientId());
   const [isValidating, setIsValidating] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
   const [successInfo, setSuccessInfo] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'token' | 'oauth'>('token');
   const [copiedRedirect, setCopiedRedirect] = useState(false);
 
+  useEffect(() => {
+    if (isOpen) {
+      setOauthClientId(getOAuthClientId());
+      setOauthError(null);
+      setValidationError(null);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePopupError = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data && event.data.type === 'TWITCH_AUTH_ERROR') {
+        const desc = event.data.errorDescription || event.data.error || 'OAuth error';
+        setOauthError(
+          lang === 'pl'
+            ? `Błąd autoryzacji Twitch (${desc}). Sprawdź, czy Redirect URL jest dokładnie dodany w dev.twitch.tv lub użyj metody Tokenu.`
+            : `Twitch OAuth error (${desc}). Verify your Redirect URL in dev.twitch.tv or use the Token tab.`
+        );
+      }
+    };
+
+    window.addEventListener('message', handlePopupError);
+    return () => window.removeEventListener('message', handlePopupError);
+  }, [isOpen, lang]);
+
   if (!isOpen) return null;
 
   const currentRedirectUri = getRedirectUri();
-  const currentClientId = getEffectiveClientId();
 
   const handleValidateAndLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -85,8 +112,34 @@ export function LoginModal({
     }
   };
 
+  const handleClientIdChange = (value: string) => {
+    setOauthClientId(value);
+    setOauthError(null);
+    const trimmed = value.trim();
+    if (trimmed) {
+      localStorage.setItem('twitch_custom_client_id', trimmed);
+    } else {
+      localStorage.removeItem('twitch_custom_client_id');
+    }
+  };
+
   const handleOpenOAuthPopup = () => {
-    const authUrl = buildTwitchAuthUrl();
+    const cleanClientId = oauthClientId.trim();
+    if (!cleanClientId) {
+      setOauthError(
+        lang === 'pl'
+          ? 'Aby użyć logowania OAuth (Popup), podaj własny Twitch Client ID z dev.twitch.tv/console lub skorzystaj z zakładki „Token Twitch (Zalecane)”.'
+          : 'To use OAuth Popup login, enter your own Twitch Client ID from dev.twitch.tv/console or use the "Twitch Token" tab.'
+      );
+      return;
+    }
+
+    localStorage.setItem('twitch_custom_client_id', cleanClientId);
+    setOauthError(null);
+
+    const authUrl = buildTwitchAuthUrl(cleanClientId, currentRedirectUri);
+    if (!authUrl) return;
+
     const width = 600;
     const height = 750;
     const left = window.screen.width / 2 - width / 2;
@@ -99,7 +152,7 @@ export function LoginModal({
     );
 
     if (!popup) {
-      setValidationError(
+      setOauthError(
         lang === 'pl'
           ? 'Przeglądarka zablokowała wyskakujące okno (popup). Zezwól na wyskakujące okna lub skorzystaj z metody tokenu.'
           : 'Browser blocked the popup window. Please allow popups or use the token method.'
@@ -265,32 +318,77 @@ export function LoginModal({
               <div className="flex items-center gap-1.5 text-amber-300 font-semibold">
                 <AlertCircle className="w-4 h-4 text-amber-400" />
                 <span>
-                  {lang === 'pl' ? 'Wymaganie Twitch OAuth Redirect' : 'Twitch OAuth Redirect Requirement'}
+                  {lang === 'pl' ? 'Własna aplikacja Twitch OAuth' : 'Your Own Twitch OAuth App'}
                 </span>
               </div>
               <p className="text-[11px] text-zinc-300 leading-relaxed">
                 {lang === 'pl'
-                  ? 'Twitch wymaga, aby adres powrotny (Redirect URL) był dokładnie zarejestrowany w aplikacji na dev.twitch.tv. Jeśli logowanie zwraca błąd "Parameter redirect_uri does not match", użyj metody Tokenu w pierwszej zakładce.'
-                  : 'Twitch requires the exact Redirect URL to be whitelisted in your app on dev.twitch.tv. If you get a redirect_uri mismatch, use the Token tab.'}
+                  ? 'Okno OAuth wymaga własnego Client ID utworzonego w Twitch Developer Console z dokładnie wpisanym poniższym adresem Redirect URL. Jeśli nie masz własnej aplikacji na dev.twitch.tv, użyj pierwszej zakładki „Token Twitch (Zalecane)”.'
+                  : 'OAuth Popup requires your own Client ID from Twitch Developer Console with the exact Redirect URL below registered. Otherwise use the "Twitch Token" tab.'}
               </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <label className="font-semibold text-zinc-200">
+                  {lang === 'pl' ? 'Twój Twitch Client ID:' : 'Your Twitch Client ID:'}
+                </label>
+                <a
+                  href="https://dev.twitch.tv/console/apps"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-purple-400 hover:text-purple-300 inline-flex items-center gap-1"
+                >
+                  <span>dev.twitch.tv/console</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <input
+                type="text"
+                value={oauthClientId}
+                onChange={(e) => handleClientIdChange(e.target.value)}
+                placeholder={
+                  lang === 'pl'
+                    ? 'Wklej Client ID swojej aplikacji Twitch'
+                    : 'Paste your Twitch app Client ID'
+                }
+                className="w-full bg-[#101012] border border-zinc-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-hidden focus:border-purple-500 placeholder-zinc-600"
+              />
             </div>
 
             <div className="space-y-2 bg-[#121214] p-3 rounded-xl border border-zinc-800">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-zinc-400">Twój aktualny Redirect URL:</span>
+                <span className="text-zinc-400">
+                  {lang === 'pl' ? 'Twój aktualny Redirect URL:' : 'Your current Redirect URL:'}
+                </span>
                 <button
                   type="button"
                   onClick={handleCopyRedirect}
                   className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
                 >
                   {copiedRedirect ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedRedirect ? 'Skopiowano' : 'Kopiuj'}</span>
+                  <span>
+                    {copiedRedirect
+                      ? lang === 'pl'
+                        ? 'Skopiowano'
+                        : 'Copied'
+                      : lang === 'pl'
+                        ? 'Kopiuj'
+                        : 'Copy'}
+                  </span>
                 </button>
               </div>
               <div className="font-mono text-[11px] text-zinc-300 break-all bg-black/40 p-2 rounded border border-zinc-800 select-all">
                 {currentRedirectUri}
               </div>
             </div>
+
+            {oauthError && (
+              <div className="p-2.5 bg-red-950/60 border border-red-800/80 rounded-lg flex items-center gap-2 text-red-300 text-xs">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{oauthError}</span>
+              </div>
+            )}
 
             <button
               type="button"

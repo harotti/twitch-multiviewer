@@ -140,7 +140,7 @@ Skopiuj plik `.env.example` do `.env`:
 ```bash
 cp .env.example .env
 ```
-Domyślna konfiguracja działa od razu po instalacji — aplikacja posiada wbudowany domyślny Client ID Twitcha oraz automatyczną walidację tokenów przez `https://id.twitch.tv/oauth2/validate`.
+Domyślna konfiguracja działa od razu po instalacji — aplikacja automatycznie rozpoznaje i waliduje tokeny Twitcha przez `https://id.twitch.tv/oauth2/validate` (opcjonalnie możesz ustawić `VITE_TWITCH_CLIENT_ID` dla logowania OAuth popupem).
 
 ---
 
@@ -191,8 +191,8 @@ Aplikacja udostępnia dwa wygodne sposoby autoryzacji w oknie logowania:
    * Gotowe! Aplikacja automatycznie dopasuje identyfikator `Client-Id` powiązany z Twoim tokenem i załaduje listę kanałów.
 
 2. **Metoda 2: Logowanie przez okno OAuth Popup**
-   * Otwiera okno autoryzacji Twitch.
-   * Jeśli używasz własnej aplikacji z [Twitch Developer Console](https://dev.twitch.tv/console), upewnij się, że w sekcji *OAuth Redirect URLs* dodałeś adres swojej instancji (np. `http://localhost:3000/`).
+   * Wymaga podania własnego `Client ID` z [Twitch Developer Console](https://dev.twitch.tv/console) w oknie logowania lub ustawieniach (opcjonalnie przez `VITE_TWITCH_CLIENT_ID`).
+   * Upewnij się, że w sekcji *OAuth Redirect URLs* swojej aplikacji na Twitchu dodałeś dokładny adres swojej instancji (np. `https://<twoj-login>.github.io/<nazwa-repozytorium>/` lub `http://localhost:3000/`).
 
 > 🔒 **Bezpieczeństwo i prywatność:** Twój token Twitch oraz historia oglądania są zapisywane **wyłącznie w pamięci lokalnej Twojej przeglądarki (`localStorage`)**. Żadne dane logowania nie są wysyłane na zewnętrzne serwery.
 

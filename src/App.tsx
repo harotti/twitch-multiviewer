@@ -7,6 +7,7 @@ import {
 } from './types';
 import {
   getStoredToken,
+  consumeOAuthErrorFromUrl,
   getCurrentUser,
   getModeratedChannels,
   getFollowedChannels,
@@ -154,28 +155,29 @@ export default function App() {
     localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
   }, [presets]);
 
-  // Listen for OAuth token callback via window message (from popup window)
+  // Listen for OAuth token/error callback via window message (from popup window)
   useEffect(() => {
     const handleAuthMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+
       if (event.data && event.data.type === 'TWITCH_AUTH_TOKEN') {
         const receivedToken = cleanToken(event.data.token);
         if (receivedToken) {
+          setLoginModalOpen(false);
           handleTokenSuccess(receivedToken);
         }
+      } else if (event.data && event.data.type === 'TWITCH_AUTH_ERROR') {
+        const desc = event.data.errorDescription || event.data.error || 'OAuth error';
+        setErrorMessage(desc);
       }
     };
 
     window.addEventListener('message', handleAuthMessage);
 
-    // If opened as a popup and has access_token in hash, notify parent and close
-    const hash = window.location.hash;
-    if (hash && hash.includes('access_token')) {
-      const params = new URLSearchParams(hash.substring(1));
-      const returnedToken = params.get('access_token');
-      if (returnedToken && window.opener) {
-        window.opener.postMessage({ type: 'TWITCH_AUTH_TOKEN', token: returnedToken }, '*');
-        window.close();
-      }
+    // Handle OAuth error returned in URL query string (if redirected directly)
+    const oauthErr = consumeOAuthErrorFromUrl();
+    if (oauthErr) {
+      setErrorMessage(oauthErr.description);
     }
 
     return () => window.removeEventListener('message', handleAuthMessage);

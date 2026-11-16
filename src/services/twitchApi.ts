@@ -1,13 +1,35 @@
 import { TwitchUser, TwitchChannelInfo } from '../types';
 
-export const DEFAULT_CLIENT_ID = 'vch0e4gq78sqrbnfvy3zs2yb2mw5jy';
-export const NETLIFY_REDIRECT_URI = 'https://celadon-kashata-4427d5.netlify.app/';
+const OAUTH_CONFIG_MIGRATION_KEY = 'twitch_oauth_config_v2';
+
+export const DEFAULT_CLIENT_ID = (import.meta.env.VITE_TWITCH_CLIENT_ID || '').trim();
+
+export function purgeLegacyOAuthConfig(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    if (!localStorage.getItem(OAUTH_CONFIG_MIGRATION_KEY)) {
+      localStorage.removeItem('twitch_custom_client_id');
+      localStorage.removeItem('twitch_token_client_id');
+      localStorage.removeItem('twitch_custom_redirect_uri');
+      localStorage.setItem(OAUTH_CONFIG_MIGRATION_KEY, '1');
+    }
+  } catch {
+    // Ignore storage errors in restricted contexts
+  }
+}
+
+if (typeof window !== 'undefined') {
+  purgeLegacyOAuthConfig();
+}
 
 export function cleanToken(raw: string): string {
   return raw.replace(/^oauth:/i, '').trim();
 }
 
 export function getStoredToken(): string | null {
+  purgeLegacyOAuthConfig();
+
   // Check URL hash for OAuth return
   const hash = window.location.hash;
   if (hash && hash.includes('access_token')) {
@@ -17,6 +39,20 @@ export function getStoredToken(): string | null {
       const cleaned = cleanToken(token);
       localStorage.setItem('twitch_token', cleaned);
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+      // If opened as an OAuth popup, notify parent window and close popup
+      if (window.opener && window.opener !== window) {
+        try {
+          window.opener.postMessage(
+            { type: 'TWITCH_AUTH_TOKEN', token: cleaned },
+            window.location.origin
+          );
+          window.close();
+        } catch {
+          // Fallback if cross-origin prevents postMessage
+        }
+      }
+
       return cleaned;
     }
   }
@@ -28,7 +64,49 @@ export function getStoredToken(): string | null {
   return stored ? cleanToken(stored) : null;
 }
 
+export function consumeOAuthErrorFromUrl(): { error: string; description: string } | null {
+  if (typeof window === 'undefined' || !window.location.search) return null;
+
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get('error');
+  if (!error) return null;
+
+  const description = params.get('error_description') || error;
+  params.delete('error');
+  params.delete('error_description');
+  params.delete('state');
+
+  const remaining = params.toString();
+  const cleanUrl = window.location.pathname + (remaining ? `?${remaining}` : '') + window.location.hash;
+  window.history.replaceState(null, '', cleanUrl);
+
+  if (window.opener && window.opener !== window) {
+    try {
+      window.opener.postMessage(
+        { type: 'TWITCH_AUTH_ERROR', error, errorDescription: description },
+        window.location.origin
+      );
+      window.close();
+    } catch {
+      // Ignore cross-origin errors
+    }
+  }
+
+  return { error, description };
+}
+
+export function getOAuthClientId(): string {
+  purgeLegacyOAuthConfig();
+
+  const custom = localStorage.getItem('twitch_custom_client_id');
+  if (custom && custom.trim()) return custom.trim();
+
+  return DEFAULT_CLIENT_ID;
+}
+
 export function getEffectiveClientId(): string {
+  purgeLegacyOAuthConfig();
+
   // Priority 1: Client ID associated with the validated token
   const tokenClientId = localStorage.getItem('twitch_token_client_id');
   if (tokenClientId && tokenClientId.trim()) return tokenClientId.trim();
@@ -37,21 +115,27 @@ export function getEffectiveClientId(): string {
   const custom = localStorage.getItem('twitch_custom_client_id');
   if (custom && custom.trim()) return custom.trim();
 
-  // Priority 3: Default client ID from initial project
+  // Priority 3: Optional environment-configured Client ID
   return DEFAULT_CLIENT_ID;
 }
 
 export function getRedirectUri(): string {
+  purgeLegacyOAuthConfig();
+
   const custom = localStorage.getItem('twitch_custom_redirect_uri');
   if (custom && custom.trim()) return custom.trim();
-  // If user hasn't overridden and is using default Client ID, default to registered Netlify or current origin
+
   return window.location.origin + window.location.pathname;
 }
 
 export function buildTwitchAuthUrl(
-  clientId = getEffectiveClientId(),
+  clientId = getOAuthClientId(),
   redirectUri = getRedirectUri()
 ): string {
+  const cleanClientId = clientId.trim();
+  const cleanRedirectUri = redirectUri.trim();
+  if (!cleanClientId) return '';
+
   const scopes = [
     'user:read:follows',
     'user:read:moderated_channels',
@@ -61,9 +145,9 @@ export function buildTwitchAuthUrl(
   ].join('%20');
 
   return `https://id.twitch.tv/oauth2/authorize?client_id=${encodeURIComponent(
-    clientId
+    cleanClientId
   )}&redirect_uri=${encodeURIComponent(
-    redirectUri
+    cleanRedirectUri
   )}&response_type=token&scope=${scopes}&force_verify=true`;
 }
 
