@@ -168,6 +168,18 @@ npm run preview
 
 ---
 
+### 🌐 6. Automatyczna publikacja na GitHub Pages (za darmo)
+Projekt jest w pełni gotowy pod **GitHub Pages** (zawiera relatywną ścieżkę bazową `base: './'`, plik `.nojekyll` oraz gotowy workflow `.github/workflows/deploy.yml`):
+
+1. Wrzuć pliki projektu do nowego (lub istniejącego) repozytorium na **GitHubie** na gałąź `main` lub `master`.
+2. Na GitHubie przejdź do zakładki **Settings → Pages**.
+3. W sekcji **Build and deployment → Source** wybierz **GitHub Actions**.
+4. Workflow automatycznie zainstaluje zależności, zbuduje projekt (`dist/`) i opublikuje stronę pod adresem:
+   `https://<twoj-login>.github.io/<nazwa-repozytorium>/`
+5. *(Opcjonalnie dla logowania OAuth popupem)* W [Twitch Developer Console](https://dev.twitch.tv/console) dodaj powyższy adres URL do **OAuth Redirect URLs** dla swojego `Client ID`. Metoda logowania przez wklejenie tokenu działa od razu bez dodatkowej konfiguracji.
+
+---
+
 ## 🔑 Jak działa logowanie z Twitchem?
 
 Aplikacja udostępnia dwa wygodne sposoby autoryzacji w oknie logowania:
