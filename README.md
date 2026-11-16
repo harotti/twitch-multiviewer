@@ -68,6 +68,32 @@
 
 ---
 
+### ⌨️ 7. Globalne Skróty Klawiszowe (Dostępność i Szybka Nawigacja)
+Steruj całą aplikacją bezpośrednio z klawiatury bez konieczności sięgania po myszkę:
+| Klawisz | Akcja |
+| :--- | :--- |
+| <kbd>Spacja</kbd> | **Wstrzymaj / Wznów** odtwarzanie (w trybie kinowym lub aktywnym streamie) |
+| <kbd>M</kbd> | **Włącz / Wyłącz Panel Moderatora** (Mod View) dla wybranego kanału |
+| <kbd>G</kbd> / <kbd>Shift+G</kbd> | **Przełączaj układy siatki** (Auto → 1x1 → 1x2 → 2x2 → 3x2) |
+| <kbd>T</kbd> | **Włącz / Wyłącz Tryb Kinowy** (Theater Mode) |
+| <kbd>B</kbd> lub <kbd>[</kbd> | **Schowaj / Pokaż panel boczny** (Sidebar) |
+| <kbd>1</kbd> – <kbd>9</kbd> | **Szybki wybór streamu** #1 do #9 w trybie kinowym |
+| <kbd>X</kbd> | **Otwórz / Zamknij statystyki xayo.pl** & piki platformy |
+| <kbd>S</kbd> | **Otwórz ustawienia aplikacji** |
+| <kbd>?</kbd> lub <kbd>F1</kbd> | **Wyświetl ściągę skrótów klawiszowych** (okno dialogowe) |
+| <kbd>Esc</kbd> | **Zamknij otwarte okno / szufladę** lub wyjdź z trybu kinowego |
+
+*Uwaga: Skróty są automatycznie wstrzymywane podczas wpisywania tekstu w polach wyszukiwania i formularzach.*
+
+---
+
+### ⚡ 8. Globalne Automatyczne Odtwarzanie (Global Auto-Play)
+* **Bezproblemowe wznawianie:** w oknie `Ustawienia` dostępny jest przełącznik **Global Auto-Play**.
+* Gdy opcja jest włączona, każdy stream dodany do siatki lub odświeżony przyciskiem `[Odśwież stream]` natychmiast rozpoczyna i wznawia odtwarzanie bez konieczności klikania w player przez użytkownika.
+* Działa w pełnej zgodności z polityką przeglądarek (streamy startują wyciszone, gotowe do natychmiastowego oglądania).
+
+---
+
 ## 🛠️ Technologie
 
 * **Frontend:** [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)

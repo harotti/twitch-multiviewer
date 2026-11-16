@@ -11,10 +11,12 @@ interface StreamGridProps {
   moderatedChannels?: TwitchChannelInfo[];
   theaterChannel: string | null;
   gridMode: GridMode;
+  globalAutoPlay?: boolean;
   onToggleTheater: (channel: string) => void;
   onCloseStream: (channel: string) => void;
   onAddChannel: (channel: string) => void;
   onOpenModView?: (channel: string) => void;
+  onStreamLiveDetected?: (channel: string) => void;
   lang?: 'pl' | 'en';
 }
 
@@ -37,10 +39,12 @@ export function StreamGrid({
   moderatedChannels = [],
   theaterChannel,
   gridMode,
+  globalAutoPlay = true,
   onToggleTheater,
   onCloseStream,
   onAddChannel,
   onOpenModView,
+  onStreamLiveDetected,
   lang = 'pl',
 }: StreamGridProps) {
   if (activeChannels.length === 0) {
@@ -138,9 +142,11 @@ export function StreamGrid({
               viewerCount={live?.viewer_count}
               watchStat={stat}
               isTheater={isTheater}
+              globalAutoPlay={globalAutoPlay}
               onToggleTheater={onToggleTheater}
               onClose={onCloseStream}
               onOpenModView={onOpenModView}
+              onStreamLiveDetected={onStreamLiveDetected}
               lang={lang}
             />
           );

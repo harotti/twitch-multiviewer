@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Key, Shield, HelpCircle, RotateCcw, Copy } from 'lucide-react';
+import { X, Check, Key, Shield, HelpCircle, RotateCcw, Copy, PlayCircle } from 'lucide-react';
 import { DEFAULT_CLIENT_ID, getEffectiveClientId, getRedirectUri } from '../services/twitchApi';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveToken: (token: string) => void;
+  globalAutoPlay?: boolean;
+  onUpdateGlobalAutoPlay?: (enabled: boolean) => void;
   lang: 'pl' | 'en';
 }
 
@@ -13,11 +15,14 @@ export function SettingsModal({
   isOpen,
   onClose,
   onSaveToken,
+  globalAutoPlay = true,
+  onUpdateGlobalAutoPlay,
   lang = 'pl',
 }: SettingsModalProps) {
   const [clientId, setClientId] = useState(DEFAULT_CLIENT_ID);
   const [redirectUri, setRedirectUri] = useState('');
   const [customToken, setCustomToken] = useState('');
+  const [autoPlay, setAutoPlay] = useState<boolean>(globalAutoPlay);
   const [copied, setCopied] = useState(false);
   const [savedMessage, setSavedMessage] = useState(false);
 
@@ -26,8 +31,10 @@ export function SettingsModal({
       setClientId(getEffectiveClientId());
       setRedirectUri(getRedirectUri());
       setCustomToken(localStorage.getItem('twitch_token') || '');
+      const savedAutoPlay = localStorage.getItem('twitch_global_autoplay');
+      setAutoPlay(savedAutoPlay !== null ? savedAutoPlay === 'true' : globalAutoPlay);
     }
-  }, [isOpen]);
+  }, [isOpen, globalAutoPlay]);
 
   if (!isOpen) return null;
 
@@ -49,6 +56,12 @@ export function SettingsModal({
       onSaveToken(customToken.trim());
     }
 
+    // Save Global Auto-Play setting
+    localStorage.setItem('twitch_global_autoplay', autoPlay ? 'true' : 'false');
+    if (onUpdateGlobalAutoPlay) {
+      onUpdateGlobalAutoPlay(autoPlay);
+    }
+
     setSavedMessage(true);
     setTimeout(() => {
       setSavedMessage(false);
@@ -61,6 +74,11 @@ export function SettingsModal({
     localStorage.removeItem('twitch_custom_redirect_uri');
     setClientId(DEFAULT_CLIENT_ID);
     setRedirectUri(window.location.origin + window.location.pathname);
+    setAutoPlay(true);
+    localStorage.setItem('twitch_global_autoplay', 'true');
+    if (onUpdateGlobalAutoPlay) {
+      onUpdateGlobalAutoPlay(true);
+    }
   };
 
   const copyRedirectUri = () => {
@@ -97,6 +115,83 @@ export function SettingsModal({
 
         {/* Content */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+          {/* Playback Settings: Global Auto-Play */}
+          <div className="p-3.5 bg-[#141416] border border-zinc-800 rounded-xl space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                    autoPlay
+                      ? 'bg-purple-600/20 text-purple-400 border border-purple-500/40'
+                      : 'bg-zinc-800 text-zinc-500 border border-zinc-700'
+                  }`}
+                >
+                  <PlayCircle className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-white text-xs truncate">
+                      {lang === 'pl' ? 'Globalne Automatyczne Odtwarzanie' : 'Global Auto-Play'}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0 ${
+                        autoPlay
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                      }`}
+                    >
+                      {autoPlay
+                        ? lang === 'pl'
+                          ? 'WŁĄCZONE'
+                          : 'ENABLED'
+                        : lang === 'pl'
+                          ? 'WYŁĄCZONE'
+                          : 'DISABLED'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    {lang === 'pl'
+                      ? 'Automatycznie wznawiaj odtwarzanie po dodaniu lub odświeżeniu streamu'
+                      : 'Automatically resume playback when streams are added or refreshed'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Accessible Toggle Switch */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoPlay}
+                onClick={() => setAutoPlay(!autoPlay)}
+                title={
+                  autoPlay
+                    ? lang === 'pl'
+                      ? 'Kliknij, aby wyłączyć automatyczne odtwarzanie'
+                      : 'Click to disable auto-play'
+                    : lang === 'pl'
+                      ? 'Kliknij, aby włączyć automatyczne odtwarzanie'
+                      : 'Click to enable auto-play'
+                }
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                  autoPlay ? 'bg-purple-600' : 'bg-zinc-700'
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    autoPlay ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <p className="text-[10px] text-zinc-500 leading-relaxed pt-1.5 border-t border-zinc-800/80">
+              {lang === 'pl'
+                ? '⚡ Gdy aktywne: odtwarzacze natychmiast startują i wznawiają transmisję bez oczekiwania na kliknięcie przez użytkownika. Streamy uruchamiają się domyślnie wyciszone, aby spełnić politykę bezpieczeństwa przeglądarek.'
+                : '⚡ When active: players automatically start and resume playback without waiting for user interaction. Streams start muted to comply with browser autoplay security policies.'}
+            </p>
+          </div>
+
           {/* Twitch Client ID */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">

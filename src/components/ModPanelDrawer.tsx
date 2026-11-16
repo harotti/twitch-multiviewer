@@ -52,20 +52,36 @@ export function ModPanelDrawer({
   const getParentDomains = (): string[] => {
     const list: string[] = [];
     if (typeof window !== 'undefined') {
-      if (window.location.hostname) list.push(window.location.hostname);
+      const host = window.location.hostname;
+      if (host) list.push(host);
+
+      if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+        for (let i = 0; i < window.location.ancestorOrigins.length; i++) {
+          try {
+            const originHost = new URL(window.location.ancestorOrigins[i]).hostname;
+            if (originHost) list.push(originHost);
+          } catch {}
+        }
+      }
+
       try {
         if (window.parent && window.parent.location.hostname) {
           list.push(window.parent.location.hostname);
         }
       } catch {}
+
       if (document.referrer) {
         try {
           const refHost = new URL(document.referrer).hostname;
           if (refHost) list.push(refHost);
         } catch {}
       }
+
+      // If in AI Studio preview or cloud run
+      if (host.includes('run.app') || (document.referrer && document.referrer.includes('google.com'))) {
+        list.push('aistudio.google.com');
+      }
     }
-    list.push('localhost', '127.0.0.1');
     return Array.from(new Set(list.filter(Boolean)));
   };
 
@@ -74,6 +90,20 @@ export function ModPanelDrawer({
   const chatEmbedUrl = `https://www.twitch.tv/embed/${encodeURIComponent(
     currentChannel
   )}/chat?${parentQuery}&darkpopout=true`;
+
+  const handleOpenPopoutChat = (targetCh?: string) => {
+    const ch = targetCh || currentChannel;
+    const url = `https://www.twitch.tv/popout/${encodeURIComponent(ch.toLowerCase())}/chat?darkpopout=true`;
+    const width = 450;
+    const height = 780;
+    const left = typeof window !== 'undefined' && window.screen.width ? Math.max(0, window.screen.width - width - 40) : 100;
+    const top = 60;
+    window.open(
+      url,
+      `twitch_popout_${ch.toLowerCase()}`,
+      `width=${width},height=${height},top=${top},left=${left},toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes`
+    );
+  };
 
   const handleCopyCommand = (cmd: string) => {
     navigator.clipboard.writeText(cmd);
@@ -97,10 +127,10 @@ export function ModPanelDrawer({
 
   return (
     <aside
-      className="fixed top-14 bottom-0 right-0 z-30 w-full sm:w-[460px] md:w-[500px] bg-[#121214] border-l border-zinc-700/80 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200 select-none"
+      className="fixed inset-y-0 right-0 z-50 w-full sm:w-[460px] md:w-[500px] bg-[#121214] border-l border-zinc-700/80 shadow-2xl flex flex-col"
     >
       {/* Top Header Bar */}
-      <div className="p-3.5 bg-[#18181b] border-b border-zinc-800 flex items-center justify-between gap-3">
+      <div className="p-3.5 bg-[#18181b] border-b border-zinc-800 flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center shrink-0">
             <Shield className="w-4 h-4" />
@@ -134,20 +164,29 @@ export function ModPanelDrawer({
           </div>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => handleOpenPopoutChat(currentChannel)}
+            title={lang === 'pl' ? 'Otwórz czat w oknie Popout (omija blokady ramek Twitch)' : 'Open Popout Chat'}
+            className="px-2 py-1 rounded-md text-amber-300 hover:text-black bg-amber-500/20 hover:bg-amber-400 text-[11px] font-bold border border-amber-500/40 flex items-center gap-1 transition-colors cursor-pointer"
+          >
+            <ExternalLink className="w-3 h-3" />
+            <span>Popout</span>
+          </button>
           <a
             href={`https://www.twitch.tv/moderator/${currentChannel}`}
             target="_blank"
             rel="noopener noreferrer"
-            title={lang === 'pl' ? 'Otwórz pełny Mod View w nowej karcie' : 'Open in new tab'}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            title={lang === 'pl' ? 'Otwórz pełny Mod View na Twitch w nowej karcie' : 'Open Twitch Mod View'}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-amber-300 hover:bg-zinc-800 transition-colors"
           >
-            <ExternalLink className="w-4 h-4" />
+            <Shield className="w-4 h-4" />
           </a>
           <button
             onClick={onClose}
             title={lang === 'pl' ? 'Zamknij panel moderatora' : 'Close Mod View'}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -216,24 +255,54 @@ export function ModPanelDrawer({
 
       {/* Main Body */}
       {activeTab === 'chat' ? (
-        <div className="flex-1 flex flex-col min-h-0 relative bg-black">
-          {/* Embedded live interactive Twitch mod chat */}
-          <iframe
-            src={chatEmbedUrl}
-            title={`Mod View Chat - ${currentChannel}`}
-            className="w-full flex-1 border-0"
-          />
+        <div className="flex-1 flex flex-col min-h-0 relative bg-[#0e0e10]">
+          {/* Top Chat Action Bar */}
+          <div className="px-3.5 py-2 bg-[#18181b] border-b border-zinc-800 flex items-center justify-between text-xs shrink-0">
+            <span className="text-[11px] text-zinc-400 flex items-center gap-1.5 font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>{lang === 'pl' ? 'Tryb moderatora na żywo' : 'Live moderator mode'}</span>
+            </span>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpenPopoutChat(currentChannel)}
+                title={
+                  lang === 'pl'
+                    ? 'Otwórz czat w oknie Popout (omija blokady ramek Twitch)'
+                    : 'Open popout chat window'
+                }
+                className="text-[11px] font-bold text-amber-300 hover:text-white bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-2.5 py-1 rounded-md flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
+                <span>{lang === 'pl' ? 'Otwórz Popout' : 'Popout Chat'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Clean isolated iframe container for viewing live chat feed */}
+          <div className="flex-1 w-full relative overflow-hidden bg-[#0e0e10]">
+            <iframe
+              src={chatEmbedUrl}
+              title={`Mod View Chat - ${currentChannel}`}
+              className="absolute inset-0 w-full h-full border-0"
+              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"
+            />
+          </div>
 
           {/* Bottom info helper */}
-          <div className="p-2 bg-[#18181b] border-t border-zinc-800 flex items-center justify-between text-[11px] text-zinc-400 px-3">
-            <span className="truncate">
-              {lang === 'pl'
-                ? 'Zaloguj się w Twitchu w przeglądarce, aby odblokować akcje /ban i /timeout'
-                : 'Log in to Twitch in browser to enable mod badges and actions'}
-            </span>
+          <div className="p-2.5 bg-[#18181b] border-t border-zinc-800 flex items-center justify-between text-[11px] text-zinc-400 px-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleOpenPopoutChat(currentChannel)}
+              className="text-amber-400 hover:text-amber-300 font-semibold flex items-center gap-1 cursor-pointer"
+            >
+              <ExternalLink className="w-3 h-3" />
+              <span>{lang === 'pl' ? 'Otwórz Popout' : 'Open Popout'}</span>
+            </button>
             <button
               onClick={() => setActiveTab('commands')}
-              className="text-amber-400 hover:underline shrink-0 ml-2 font-medium"
+              className="text-amber-400 hover:underline shrink-0 ml-2 font-medium cursor-pointer"
             >
               {lang === 'pl' ? 'Komendy' : 'Commands'} →
             </button>

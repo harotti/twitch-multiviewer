@@ -50,6 +50,7 @@ export interface AppSettings {
   redirectUri: string;
   customToken: string;
   autoMuteNewStreams: boolean;
+  globalAutoPlay: boolean;
   preferredQuality: string;
   language: 'pl' | 'en';
 }

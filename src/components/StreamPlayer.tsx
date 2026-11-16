@@ -24,9 +24,11 @@ interface StreamPlayerProps {
   viewerCount?: number;
   watchStat?: ChannelWatchStat;
   isTheater?: boolean;
+  globalAutoPlay?: boolean;
   onToggleTheater?: (channel: string) => void;
   onClose: (channel: string) => void;
   onOpenModView?: (channel: string) => void;
+  onStreamLiveDetected?: (channel: string) => void;
   lang?: 'pl' | 'en';
 }
 
@@ -39,39 +41,56 @@ export function StreamPlayer({
   viewerCount,
   watchStat,
   isTheater,
+  globalAutoPlay = true,
   onToggleTheater,
   onClose,
   onOpenModView,
+  onStreamLiveDetected,
   lang = 'pl',
 }: StreamPlayerProps) {
   const [showChat, setShowChat] = useState<boolean>(false);
   const [reloadKey, setReloadKey] = useState<number>(0);
   const [playerLoaded, setPlayerLoaded] = useState<boolean>(false);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const playerInstanceRef = useRef<any>(null);
+  const lastRefreshTimeRef = useRef<number>(Date.now());
 
   const containerId = `twitch-player-${channel.toLowerCase()}-${reloadKey}`;
 
-  // Build parent domain list
+  // Build parent domain list (must include AI Studio domains to prevent Twitch embed blocking)
   const getParentDomains = (): string[] => {
     const list: string[] = [];
     if (typeof window !== 'undefined') {
-      if (window.location.hostname) list.push(window.location.hostname);
+      const host = window.location.hostname;
+      if (host) list.push(host);
+
+      if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+        for (let i = 0; i < window.location.ancestorOrigins.length; i++) {
+          try {
+            const originHost = new URL(window.location.ancestorOrigins[i]).hostname;
+            if (originHost) list.push(originHost);
+          } catch {}
+        }
+      }
+
       try {
         if (window.parent && window.parent.location.hostname) {
           list.push(window.parent.location.hostname);
         }
-      } catch {
-        // ignore cross-origin security block
-      }
+      } catch {}
+
       if (document.referrer) {
         try {
           const refHost = new URL(document.referrer).hostname;
           if (refHost) list.push(refHost);
         } catch {}
       }
+
+      if (host.includes('run.app') || (document.referrer && document.referrer.includes('google.com'))) {
+        list.push('aistudio.google.com');
+      }
     }
-    list.push('localhost', '127.0.0.1');
     return Array.from(new Set(list.filter(Boolean)));
   };
 
@@ -80,7 +99,16 @@ export function StreamPlayer({
 
   useEffect(() => {
     let isCancelled = false;
-    setPlayerLoaded(false);
+
+    // Helper to fix browser permission attributes on dynamically inserted Twitch iframes
+    const fixIframePermissions = () => {
+      if (!containerRef.current) return;
+      const iframes = containerRef.current.querySelectorAll('iframe');
+      iframes.forEach((ifr) => {
+        ifr.setAttribute('allow', 'autoplay; fullscreen');
+        ifr.setAttribute('allowfullscreen', 'true');
+      });
+    };
 
     // Initialize Twitch Interactive Player if script is ready
     const initPlayer = () => {
@@ -88,7 +116,7 @@ export function StreamPlayer({
 
       const TwitchWindow = (window as any).Twitch;
       if (TwitchWindow && TwitchWindow.Player) {
-        // Clear previous player dom
+        // Clean previous player DOM completely
         containerRef.current.innerHTML = '';
 
         try {
@@ -98,38 +126,162 @@ export function StreamPlayer({
             height: '100%',
             parent: parents,
             autoplay: true,
-            muted: true, // browsers require mute for autoplay
+            muted: true, // browser autoplay policy mandates muted on initial programmatic play
           });
           playerInstanceRef.current = player;
+
+          // Grant iframe permission to autoplay immediately
+          fixIframePermissions();
+          setTimeout(fixIframePermissions, 200);
+          setTimeout(fixIframePermissions, 800);
+
+          if (typeof window !== 'undefined') {
+            (window as any).__twitchPlayers = (window as any).__twitchPlayers || new Map();
+            (window as any).__twitchPlayers.set(channel.toLowerCase(), player);
+          }
           setPlayerLoaded(true);
+
+          // Force playback resumption (Auto-Play)
+          const forceResume = () => {
+            if (isCancelled) return;
+            try {
+              if (typeof player.setMuted === 'function') {
+                player.setMuted(true);
+              }
+              if (typeof player.play === 'function') {
+                player.play();
+              }
+            } catch (e) {
+              console.warn('AutoPlay playback resumption failed:', e);
+            }
+          };
+
+          // Event 1: Player is ready
+          if (TwitchWindow.Player.READY) {
+            player.addEventListener(TwitchWindow.Player.READY, () => {
+              fixIframePermissions();
+              forceResume();
+            });
+          }
+
+          // Event 2: Stream went online / reconnected
+          if (TwitchWindow.Player.ONLINE) {
+            player.addEventListener(TwitchWindow.Player.ONLINE, () => {
+              forceResume();
+              if (onStreamLiveDetected) {
+                onStreamLiveDetected(channel.toLowerCase().trim());
+              }
+            });
+          }
+
+          // Event 2b: Stream starts playing video
+          if (TwitchWindow.Player.PLAYING) {
+            player.addEventListener(TwitchWindow.Player.PLAYING, () => {
+              if (onStreamLiveDetected) {
+                onStreamLiveDetected(channel.toLowerCase().trim());
+              }
+            });
+          }
+
+          // Event 3: If stream pauses during reload or mount cycle, auto-resume immediately
+          if (TwitchWindow.Player.PAUSE) {
+            player.addEventListener(TwitchWindow.Player.PAUSE, () => {
+              if (Date.now() - lastRefreshTimeRef.current < 7000) {
+                setTimeout(forceResume, 150);
+              }
+            });
+          }
+
+          // Staggered timers to ensure playback resumes as soon as HLS chunk arrives
+          const t1 = setTimeout(forceResume, 250);
+          const t2 = setTimeout(forceResume, 700);
+          const t3 = setTimeout(forceResume, 1500);
+          const t4 = setTimeout(forceResume, 2800);
+
+          cleanupTimers = () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+            clearTimeout(t3);
+            clearTimeout(t4);
+          };
         } catch (err) {
           console.warn('Twitch.Player SDK init fallback to iframe', err);
+          setPlayerLoaded(false);
         }
       }
     };
 
-    // Retry a bit if script is still loading
+    let cleanupTimers: (() => void) | null = null;
+
+    // If script is ready, init directly without unmounting
     if ((window as any).Twitch?.Player) {
       initPlayer();
     } else {
-      const timer = setTimeout(initPlayer, 600);
+      setPlayerLoaded(false);
+      const timer = setTimeout(initPlayer, 500);
       return () => {
         isCancelled = true;
+        if (typeof window !== 'undefined' && (window as any).__twitchPlayers) {
+          (window as any).__twitchPlayers.delete(channel.toLowerCase());
+        }
         clearTimeout(timer);
       };
     }
 
     return () => {
       isCancelled = true;
+      if (cleanupTimers) cleanupTimers();
+      if (typeof window !== 'undefined' && (window as any).__twitchPlayers) {
+        (window as any).__twitchPlayers.delete(channel.toLowerCase());
+      }
     };
-  }, [channel, reloadKey]);
+  }, [channel, reloadKey, globalAutoPlay]);
 
+  // Robust Stream Refresh handler: completely rebuilds player to reconnect live edge and auto-play
   const handleRefresh = () => {
+    setIsRefreshing(true);
+    lastRefreshTimeRef.current = Date.now();
+
+    // 1. If player SDK instance is active, attempt soft resume or pause
+    const player = playerInstanceRef.current;
+    if (player) {
+      try {
+        if (typeof player.pause === 'function') {
+          player.pause();
+        }
+      } catch {}
+      playerInstanceRef.current = null;
+    }
+
+    // 2. Wipe container DOM cleanly to terminate old HLS buffer completely
+    if (containerRef.current) {
+      containerRef.current.innerHTML = '';
+    }
+
+    // 3. Increment reloadKey to trigger fresh player instantiation with new HLS connection
     setReloadKey((prev) => prev + 1);
+
+    // 4. Release refreshing visual spinner after mount starts
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 900);
   };
 
   const totalTimeStr = watchStat ? formatTime(watchStat.totalSeconds) : '0s';
   const sessionTimeStr = watchStat ? formatTime(watchStat.sessionSeconds) : '0s';
+
+  const handleOpenPopoutChat = () => {
+    const url = `https://www.twitch.tv/popout/${encodeURIComponent(channel.toLowerCase())}/chat?darkpopout=true`;
+    const width = 440;
+    const height = 750;
+    const left = typeof window !== 'undefined' && window.screen.width ? Math.max(0, window.screen.width - width - 50) : 100;
+    const top = 60;
+    window.open(
+      url,
+      `twitch_popout_${channel.toLowerCase()}`,
+      `width=${width},height=${height},top=${top},left=${left},toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes`
+    );
+  };
 
   const chatEmbedUrl = `https://www.twitch.tv/embed/${encodeURIComponent(
     channel.toLowerCase()
@@ -218,10 +370,15 @@ export function StreamPlayer({
           {/* Refresh Stream */}
           <button
             onClick={handleRefresh}
-            title={lang === 'pl' ? 'Odśwież stream' : 'Refresh stream'}
-            className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            disabled={isRefreshing}
+            title={lang === 'pl' ? 'Odśwież i wznów transmisję na żywo (Auto-Play)' : 'Refresh and auto-resume live stream'}
+            className={`p-1.5 rounded transition-all ${
+              isRefreshing
+                ? 'bg-purple-900/60 text-purple-300 cursor-wait'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+            }`}
           >
-            <RotateCcw className="w-3.5 h-3.5" />
+            <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-purple-400' : ''}`} />
           </button>
 
           {/* Theater Mode */}
@@ -259,9 +416,11 @@ export function StreamPlayer({
           {/* Fallback iframe if SDK hasn't loaded */}
           {!playerLoaded && (
             <iframe
-              src={`https://player.twitch.tv/?channel=${channel.toLowerCase()}&${parentQuery}&autoplay=true&muted=true`}
+              key={`${channel}-${reloadKey}`}
+              src={`https://player.twitch.tv/?channel=${channel.toLowerCase()}&${parentQuery}&autoplay=true&muted=true&time=${reloadKey}`}
               title={`Twitch Player - ${channel}`}
               className="absolute inset-0 w-full h-full border-0"
+              allow="autoplay; fullscreen"
               allowFullScreen
             />
           )}
@@ -270,6 +429,28 @@ export function StreamPlayer({
           <div className="absolute bottom-2 left-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity bg-black/75 backdrop-blur-xs text-[11px] text-zinc-300 px-2 py-1 rounded flex items-center gap-1.5 border border-zinc-800">
             <Volume2 className="w-3 h-3 text-purple-400" />
             <span>{lang === 'pl' ? 'Domyślnie wyciszone (zasady przeglądarek)' : 'Muted by default (browser policy)'}</span>
+          </div>
+
+          {/* Quick manual resume / sound button on hover */}
+          <div className="absolute bottom-2 right-2 flex items-center gap-1.5 z-10">
+            <button
+              onClick={() => {
+                const player = playerInstanceRef.current;
+                if (player) {
+                  try {
+                    player.setMuted(false);
+                    player.play();
+                  } catch {
+                    try { player.play(); } catch {}
+                  }
+                }
+              }}
+              title={lang === 'pl' ? 'Włącz dźwięk i wznów odtwarzanie' : 'Unmute & play'}
+              className="opacity-0 group-hover:opacity-100 transition-opacity bg-purple-600/90 hover:bg-purple-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1 cursor-pointer"
+            >
+              <Volume2 className="w-3 h-3" />
+              <span>{lang === 'pl' ? 'Dźwięk' : 'Unmute'}</span>
+            </button>
           </div>
         </div>
 
@@ -280,18 +461,37 @@ export function StreamPlayer({
               <span className="font-semibold text-zinc-200">
                 {lang === 'pl' ? 'Czat na żywo' : 'Live Chat'}
               </span>
-              <button
-                onClick={() => setShowChat(false)}
-                className="hover:text-white p-0.5 rounded"
-              >
-                <X className="w-3 h-3" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleOpenPopoutChat}
+                  title={
+                    lang === 'pl'
+                      ? 'Otwórz czat w oknie Popout (omija blokady iframe i pozwala swobodnie pisać ze swojego konta)'
+                      : 'Open popout chat window (bypasses iframe restrictions)'
+                  }
+                  className="hover:text-white p-1 rounded text-zinc-400 hover:bg-zinc-800 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="text-[10px] font-bold text-purple-400 hover:text-purple-300">Popout</span>
+                </button>
+                <button
+                  onClick={() => setShowChat(false)}
+                  className="hover:text-white p-1 rounded text-zinc-400 hover:bg-zinc-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-            <iframe
-              src={chatEmbedUrl}
-              title={`Twitch Chat - ${channel}`}
-              className="w-full flex-1 border-0"
-            />
+
+            <div className="flex-1 w-full relative overflow-hidden bg-[#0e0e10]">
+              <iframe
+                src={chatEmbedUrl}
+                title={`Twitch Chat - ${channel}`}
+                className="absolute inset-0 w-full h-full border-0"
+                allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"
+              />
+            </div>
           </div>
         )}
       </div>

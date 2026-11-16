@@ -55,6 +55,9 @@ export function buildTwitchAuthUrl(
   const scopes = [
     'user:read:follows',
     'user:read:moderated_channels',
+    'user:write:chat',
+    'chat:read',
+    'chat:edit',
   ].join('%20');
 
   return `https://id.twitch.tv/oauth2/authorize?client_id=${encodeURIComponent(
@@ -123,7 +126,9 @@ export async function fetchHelix<T>(
   clientId = getEffectiveClientId()
 ): Promise<T> {
   const cleaned = cleanToken(token);
-  const res = await fetch(`https://api.twitch.tv/helix/${endpoint}`, {
+  const sep = endpoint.includes('?') ? '&' : '?';
+  const urlWithCacheBuster = `https://api.twitch.tv/helix/${endpoint}${sep}_cb=${Date.now()}`;
+  const res = await fetch(urlWithCacheBuster, {
     headers: {
       Authorization: `Bearer ${cleaned}`,
       'Client-Id': clientId,
@@ -190,28 +195,40 @@ export async function getModeratedChannels(
 export async function getFollowedChannels(
   userId: string,
   token: string,
-  clientId = getEffectiveClientId()
+  clientId = getEffectiveClientId(),
+  maxPages = 5 // Fetches up to 500 followed channels with cursor pagination
 ): Promise<TwitchChannelInfo[]> {
-  try {
-    const data = await fetchHelix<{
-      data: Array<{
-        broadcaster_id: string;
-        broadcaster_login: string;
-        broadcaster_name: string;
-        followed_at?: string;
-      }>;
-    }>(`channels/followed?user_id=${userId}&first=100`, token, clientId);
+  const allChannels: TwitchChannelInfo[] = [];
+  let cursor: string | undefined = undefined;
 
-    return (data.data || []).map((ch) => ({
-      broadcaster_id: ch.broadcaster_id,
-      broadcaster_login: ch.broadcaster_login,
-      broadcaster_name: ch.broadcaster_name,
-      followed_at: ch.followed_at,
-      is_moderator: false,
-    }));
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      const cursorParam = cursor ? `&after=${encodeURIComponent(cursor)}` : '';
+      const data: any = await fetchHelix(
+        `channels/followed?user_id=${userId}&first=100${cursorParam}`,
+        token,
+        clientId
+      );
+
+      const items = (data?.data || []).map((ch: any) => ({
+        broadcaster_id: ch.broadcaster_id,
+        broadcaster_login: ch.broadcaster_login,
+        broadcaster_name: ch.broadcaster_name,
+        followed_at: ch.followed_at,
+        is_moderator: false,
+      }));
+
+      allChannels.push(...items);
+
+      cursor = data?.pagination?.cursor;
+      if (!cursor || items.length < 100) {
+        break;
+      }
+    }
+    return allChannels;
   } catch (err) {
     console.warn('Could not fetch followed channels', err);
-    return [];
+    return allChannels;
   }
 }
 
@@ -225,28 +242,175 @@ export interface LiveStreamData {
   started_at: string;
 }
 
-export async function getLiveStreams(
-  logins: string[],
+/**
+ * Directly queries Twitch for all followed streams that are currently LIVE.
+ * Requires user:read:follows scope (already granted).
+ */
+export async function getFollowedLiveStreams(
+  userId: string,
   token: string,
   clientId = getEffectiveClientId()
 ): Promise<Record<string, LiveStreamData>> {
-  if (!logins.length) return {};
-  const query = logins.map((l) => `user_login=${encodeURIComponent(l.toLowerCase())}`).join('&');
+  const map: Record<string, LiveStreamData> = {};
+  let cursor: string | undefined = undefined;
+
   try {
-    const data = await fetchHelix<{ data: LiveStreamData[] }>(
-      `streams?${query}&first=100`,
-      token,
-      clientId
-    );
-    const map: Record<string, LiveStreamData> = {};
-    (data.data || []).forEach((stream) => {
-      map[stream.user_login.toLowerCase()] = stream;
-    });
+    for (let page = 0; page < 3; page++) {
+      const cursorParam = cursor ? `&after=${encodeURIComponent(cursor)}` : '';
+      const data: any = await fetchHelix(
+        `streams/followed?user_id=${userId}&first=100${cursorParam}`,
+        token,
+        clientId
+      );
+
+      (data?.data || []).forEach((stream: any) => {
+        if (stream.user_login) {
+          map[stream.user_login.toLowerCase().trim()] = stream;
+        }
+      });
+
+      cursor = data?.pagination?.cursor;
+      if (!cursor || !data?.data?.length || data.data.length < 100) {
+        break;
+      }
+    }
     return map;
   } catch (err) {
-    console.warn('Failed to query live stream status', err);
-    return {};
+    console.warn('Could not fetch followed live streams', err);
+    return map;
   }
+}
+
+export const TWITCH_PUBLIC_GQL_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+
+/**
+ * Fallback real-time stream status resolver via Twitch's GQL service.
+ * Bypasses Helix edge CDN caching, replication lag, and works even without OAuth tokens.
+ * Accurately detects active streams (like 'domciafk') when Helix returns stale offline results.
+ */
+export async function getLiveStreamsGQL(
+  logins: string[]
+): Promise<Record<string, LiveStreamData>> {
+  if (!logins.length) return {};
+  const cleanLogins = Array.from(
+    new Set(logins.map((l) => l.toLowerCase().trim()).filter(Boolean))
+  );
+  if (!cleanLogins.length) return {};
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < cleanLogins.length; i += 70) {
+    chunks.push(cleanLogins.slice(i, i + 70));
+  }
+
+  const map: Record<string, LiveStreamData> = {};
+
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const query = `query GetLiveUsers { users(logins: ${JSON.stringify(chunk)}) { id login displayName stream { id title viewersCount game { name } createdAt previewImageURL(width: 320, height: 180) } } }`;
+
+        const res = await fetch('https://gql.twitch.tv/gql', {
+          method: 'POST',
+          headers: {
+            'Client-Id': TWITCH_PUBLIC_GQL_CLIENT_ID,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query }),
+        });
+
+        if (!res.ok) return;
+        const data = await res.json();
+        const users = data?.data?.users;
+        if (Array.isArray(users)) {
+          users.forEach((u: any) => {
+            const login = u?.login?.toLowerCase().trim();
+            if (login && u.stream) {
+              map[login] = {
+                user_login: login,
+                user_name: u.displayName || u.login,
+                game_name: u.stream.game?.name || '',
+                title: u.stream.title || '',
+                viewer_count: u.stream.viewersCount || 0,
+                thumbnail_url:
+                  u.stream.previewImageURL ||
+                  `https://static-cdn.jtvnw.net/previews-ttv/live_user_${login}-320x180.jpg`,
+                started_at: u.stream.createdAt || new Date().toISOString(),
+              };
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('GQL live stream lookup fallback error', err);
+      }
+    })
+  );
+
+  return map;
+}
+
+/**
+ * Queries Twitch for live streams with an automatic fallback & cache-refresh mechanism:
+ * 1. Queries Twitch Helix streams API in parallel batches with cache-busting headers.
+ * 2. If token is missing, or if channels are still reported offline (e.g. 'domciafk' due to Helix edge lag),
+ *    queries Twitch's real-time GQL endpoint to bypass stale edge cache.
+ * 3. Merges the results so active live streams are never missed.
+ */
+export async function getLiveStreams(
+  logins: string[],
+  token?: string | null,
+  clientId = getEffectiveClientId()
+): Promise<Record<string, LiveStreamData>> {
+  if (!logins.length) return {};
+  const cleanLogins = Array.from(
+    new Set(logins.map((l) => l.toLowerCase().trim()).filter(Boolean))
+  );
+  if (!cleanLogins.length) return {};
+
+  const resultMap: Record<string, LiveStreamData> = {};
+
+  // Tier 1: If OAuth token exists, query Helix streams with cache-busting
+  if (token) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < cleanLogins.length; i += 100) {
+      chunks.push(cleanLogins.slice(i, i + 100));
+    }
+
+    await Promise.all(
+      chunks.map(async (chunk) => {
+        const query = chunk.map((l) => `user_login=${encodeURIComponent(l)}`).join('&');
+        try {
+          const data = await fetchHelix<{ data: LiveStreamData[] }>(
+            `streams?${query}&first=100`,
+            token,
+            clientId
+          );
+          (data.data || []).forEach((stream) => {
+            if (stream.user_login) {
+              resultMap[stream.user_login.toLowerCase().trim()] = stream;
+            }
+          });
+        } catch (err) {
+          console.warn('Failed to query live stream batch from Helix', err);
+        }
+      })
+    );
+  }
+
+  // Tier 2: Real-time fallback & cache-refresh check for any channels reported as offline / missing
+  // Channels like 'domciafk' often experience Helix edge CDN caching delay.
+  const offlineOrMissing = cleanLogins.filter((login) => !resultMap[login]);
+
+  if (offlineOrMissing.length > 0) {
+    try {
+      const gqlResults = await getLiveStreamsGQL(offlineOrMissing);
+      // Merge GQL results into resultMap (GQL overrides offline status with real-time stream data)
+      Object.assign(resultMap, gqlResults);
+    } catch (gqlErr) {
+      console.warn('Fallback GQL check error', gqlErr);
+    }
+  }
+
+  return resultMap;
 }
 
 export function openTwitchModView(channel: string): void {

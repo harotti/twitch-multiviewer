@@ -10,12 +10,15 @@ import {
   getCurrentUser,
   getModeratedChannels,
   getFollowedChannels,
+  getFollowedLiveStreams,
   getLiveStreams,
+  getLiveStreamsGQL,
   validateTwitchToken,
   cleanToken,
   LiveStreamData,
 } from './services/twitchApi';
 import { useWatchTimeTracker } from './hooks/useWatchTimeTracker';
+import { useGlobalKeyboardShortcuts } from './hooks/useGlobalKeyboardShortcuts';
 import { Sidebar } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { StreamGrid } from './components/StreamGrid';
@@ -23,12 +26,15 @@ import { SettingsModal } from './components/SettingsModal';
 import { LoginModal } from './components/LoginModal';
 import { XayoModal } from './components/XayoModal';
 import { ModPanelDrawer } from './components/ModPanelDrawer';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { AlertCircle, CheckCircle2, X } from 'lucide-react';
 
 const PRESETS_STORAGE_KEY = 'twitch_stream_presets_v1';
 const ACTIVE_CHANNELS_KEY = 'twitch_active_channels';
+const RECENT_STREAMS_KEY = 'twitch_recent_streams_v1';
 const GRID_MODE_KEY = 'twitch_grid_mode';
 const LANG_KEY = 'twitch_lang_pref';
+const GLOBAL_AUTOPLAY_KEY = 'twitch_global_autoplay';
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
@@ -36,6 +42,19 @@ export default function App() {
   const [moderatedChannels, setModeratedChannels] = useState<TwitchChannelInfo[]>([]);
   const [followedChannels, setFollowedChannels] = useState<TwitchChannelInfo[]>([]);
   const [liveStreams, setLiveStreams] = useState<Record<string, LiveStreamData>>({});
+
+  const [recentStreams, setRecentStreams] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(RECENT_STREAMS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.slice(0, 5);
+        }
+      }
+    } catch {}
+    return [];
+  });
 
   const [activeChannels, setActiveChannels] = useState<string[]>(() => {
     try {
@@ -76,6 +95,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const [xayoModalOpen, setXayoModalOpen] = useState<boolean>(false);
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState<boolean>(false);
   const [modPanelChannel, setModPanelChannel] = useState<string | null>(null);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -84,6 +104,15 @@ export default function App() {
   const [lang, setLang] = useState<'pl' | 'en'>(() => {
     const saved = localStorage.getItem(LANG_KEY);
     return saved === 'en' ? 'en' : 'pl';
+  });
+
+  const [globalAutoPlay, setGlobalAutoPlay] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(GLOBAL_AUTOPLAY_KEY);
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
   });
 
   // Watch Time Engine
@@ -98,6 +127,13 @@ export default function App() {
     localStorage.setItem(ACTIVE_CHANNELS_KEY, JSON.stringify(activeChannels));
   }, [activeChannels]);
 
+  // Sync recent streams to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(RECENT_STREAMS_KEY, JSON.stringify(recentStreams));
+    } catch {}
+  }, [recentStreams]);
+
   // Sync grid mode
   useEffect(() => {
     localStorage.setItem(GRID_MODE_KEY, gridMode);
@@ -107,6 +143,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(LANG_KEY, lang);
   }, [lang]);
+
+  // Sync global auto-play preference
+  useEffect(() => {
+    localStorage.setItem(GLOBAL_AUTOPLAY_KEY, globalAutoPlay ? 'true' : 'false');
+  }, [globalAutoPlay]);
 
   // Sync presets
   useEffect(() => {
@@ -164,17 +205,23 @@ export default function App() {
       setModeratedChannels(modList);
       setFollowedChannels(followList);
 
-      // Fetch live statuses
+      // Fetch live statuses across all followed channels, mod channels, and active grid
       const allLogins = Array.from(
         new Set([
-          ...modList.map((c) => c.broadcaster_login),
-          ...followList.map((c) => c.broadcaster_login),
+          ...modList.map((c) => c.broadcaster_login.toLowerCase().trim()),
+          ...followList.map((c) => c.broadcaster_login.toLowerCase().trim()),
+          ...activeChannels.map((c) => c.toLowerCase().trim()),
         ])
       );
 
-      if (allLogins.length > 0) {
-        const liveMap = await getLiveStreams(allLogins.slice(0, 80), activeToken);
-        setLiveStreams(liveMap);
+      try {
+        const [followedLiveMap, directLiveMap] = await Promise.all([
+          getFollowedLiveStreams(userData.id, activeToken),
+          allLogins.length > 0 ? getLiveStreams(allLogins, activeToken) : Promise.resolve({}),
+        ]);
+        setLiveStreams({ ...followedLiveMap, ...directLiveMap });
+      } catch (streamErr) {
+        console.warn('Failed to fetch initial live statuses', streamErr);
       }
 
       setToastMessage(
@@ -193,7 +240,7 @@ export default function App() {
     } finally {
       setIsLoadingData(false);
     }
-  }, [lang]);
+  }, [lang, activeChannels]);
 
   // On mount or when token changes, load data
   useEffect(() => {
@@ -202,27 +249,75 @@ export default function App() {
     }
   }, [token, loadTwitchData]);
 
-  // Periodically refresh live streams (every 60s)
+  // Periodically refresh live streams (every 30s with hybrid GQL fallback)
   useEffect(() => {
-    if (!token) return;
-
-    const interval = setInterval(() => {
+    const poll = async () => {
       const allLogins = Array.from(
         new Set([
-          ...moderatedChannels.map((c) => c.broadcaster_login),
-          ...followedChannels.map((c) => c.broadcaster_login),
-          ...activeChannels,
+          ...moderatedChannels.map((c) => c.broadcaster_login.toLowerCase().trim()),
+          ...followedChannels.map((c) => c.broadcaster_login.toLowerCase().trim()),
+          ...activeChannels.map((c) => c.toLowerCase().trim()),
         ])
       );
-      if (allLogins.length > 0) {
-        getLiveStreams(allLogins.slice(0, 80), token)
-          .then((map) => setLiveStreams((prev) => ({ ...prev, ...map })))
-          .catch(() => {});
+      if (!allLogins.length) return;
+      try {
+        const [followedLive, directLive] = await Promise.all([
+          token && user?.id ? getFollowedLiveStreams(user.id, token) : Promise.resolve({}),
+          getLiveStreams(allLogins, token),
+        ]);
+        setLiveStreams((prev) => ({ ...prev, ...followedLive, ...directLive }));
+      } catch (err) {
+        console.warn('Periodic live stream polling failed', err);
       }
-    }, 60000);
+    };
 
+    poll();
+    const interval = setInterval(poll, 30000);
     return () => clearInterval(interval);
-  }, [token, moderatedChannels, followedChannels, activeChannels]);
+  }, [token, user?.id, moderatedChannels, followedChannels, activeChannels]);
+
+  // Whenever activeChannels updates, ensure live status is immediately retrieved
+  useEffect(() => {
+    if (activeChannels.length === 0) return;
+    const missing = activeChannels.filter((ch) => !liveStreams[ch.toLowerCase().trim()]);
+    if (missing.length > 0) {
+      getLiveStreams(missing, token)
+        .then((map) => {
+          if (Object.keys(map).length > 0) {
+            setLiveStreams((prev) => ({ ...prev, ...map }));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [activeChannels, token, liveStreams]);
+
+  // Player-level real-time live detection callback
+  const handleStreamLiveDetected = useCallback(
+    (channel: string) => {
+      const lower = channel.toLowerCase().trim();
+      if (!liveStreams[lower]) {
+        getLiveStreamsGQL([lower]).then((gqlMap) => {
+          if (gqlMap[lower]) {
+            setLiveStreams((prev) => ({ ...prev, [lower]: gqlMap[lower] }));
+          } else {
+            setLiveStreams((prev) => ({
+              ...prev,
+              [lower]: {
+                user_login: lower,
+                user_name: channel,
+                game_name: '',
+                title: '',
+                viewer_count: 0,
+                thumbnail_url: `https://static-cdn.jtvnw.net/previews-ttv/live_user_${lower}-320x180.jpg`,
+                started_at: new Date().toISOString(),
+              },
+            }));
+          }
+        });
+      }
+    },
+    [liveStreams]
+  );
 
   // Trigger login modal
   const handleOpenLogin = () => {
@@ -250,16 +345,84 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // Update Global Auto-Play setting
+  const handleUpdateGlobalAutoPlay = (enabled: boolean) => {
+    setGlobalAutoPlay(enabled);
+    localStorage.setItem(GLOBAL_AUTOPLAY_KEY, enabled ? 'true' : 'false');
+
+    if (enabled && typeof window !== 'undefined') {
+      const registry = (window as any).__twitchPlayers;
+      if (registry) {
+        registry.forEach((p: any) => {
+          try {
+            if (p && typeof p.play === 'function') {
+              p.play();
+            }
+          } catch {}
+        });
+      }
+      setToastMessage(
+        lang === 'pl'
+          ? '▶ Włączono Globalne Auto-Play – streamy wznawiają się automatycznie'
+          : '▶ Global Auto-Play enabled – streams resume playback automatically'
+      );
+    } else {
+      setToastMessage(
+        lang === 'pl'
+          ? '⏸ Wyłączono Globalne Auto-Play'
+          : '⏸ Global Auto-Play disabled'
+      );
+    }
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  // Record channel(s) in recent streams history (max 5)
+  const recordRecentStream = useCallback((channelsToAdd: string | string[]) => {
+    const list = Array.isArray(channelsToAdd) ? channelsToAdd : [channelsToAdd];
+    const cleaned = list.map((c) => c.toLowerCase().trim()).filter(Boolean);
+    if (!cleaned.length) return;
+
+    setRecentStreams((prev) => {
+      const merged = [...cleaned.reverse(), ...prev];
+      const deduped = Array.from(new Set(merged));
+      return deduped.slice(0, 5);
+    });
+  }, []);
+
+  const handleRemoveRecentStream = useCallback((channel: string) => {
+    const clean = channel.toLowerCase().trim();
+    setRecentStreams((prev) => prev.filter((c) => c !== clean));
+  }, []);
+
+  const handleClearRecentStreams = useCallback(() => {
+    setRecentStreams([]);
+  }, []);
+
   // Add channel to active stream list
   const handleAddChannel = (channelRaw: string) => {
     const clean = channelRaw.trim().toLowerCase();
     if (!clean) return;
+
+    recordRecentStream(clean);
 
     if (activeChannels.some((c) => c.toLowerCase() === clean)) {
       return;
     }
 
     setActiveChannels((prev) => [...prev, clean]);
+
+    // If global auto-play is enabled, ensure newly added stream starts playback immediately
+    if (globalAutoPlay) {
+      setTimeout(() => {
+        const registry = (window as any).__twitchPlayers;
+        const player = registry?.get(clean);
+        if (player && typeof player.play === 'function') {
+          try {
+            player.play();
+          } catch {}
+        }
+      }, 1000);
+    }
   };
 
   // Remove channel from active stream list
@@ -297,8 +460,26 @@ export default function App() {
 
   // Load preset
   const handleLoadPreset = (preset: StreamPreset) => {
+    recordRecentStream(preset.channels);
     setActiveChannels(preset.channels);
     setTheaterChannel(null);
+
+    // If global auto-play is enabled, ensure all streams in the preset start playing
+    if (globalAutoPlay) {
+      setTimeout(() => {
+        const registry = (window as any).__twitchPlayers;
+        if (registry) {
+          preset.channels.forEach((ch) => {
+            const player = registry.get(ch.toLowerCase());
+            if (player && typeof player.play === 'function') {
+              try {
+                player.play();
+              } catch {}
+            }
+          });
+        }
+      }, 1000);
+    }
   };
 
   // Delete preset
@@ -310,6 +491,193 @@ export default function App() {
   const handleToggleLang = () => {
     setLang((prev) => (prev === 'pl' ? 'en' : 'pl'));
   };
+
+  // ==========================================
+  // GLOBAL KEYBOARD SHORTCUTS LOGIC & HANDLERS
+  // ==========================================
+  const GRID_CYCLE_MODES: GridMode[] = ['auto', '1x1', '1x2', '2x2', '3x2'];
+
+  // G shortcut: cycle grid layouts
+  const handleCycleGridMode = useCallback(
+    (direction: 'forward' | 'backward' = 'forward') => {
+      setTheaterChannel(null);
+      setGridMode((prevMode) => {
+        const curIdx = GRID_CYCLE_MODES.indexOf(prevMode);
+        let nextIdx = 0;
+        if (curIdx === -1) {
+          nextIdx = 0;
+        } else if (direction === 'forward') {
+          nextIdx = (curIdx + 1) % GRID_CYCLE_MODES.length;
+        } else {
+          nextIdx = (curIdx - 1 + GRID_CYCLE_MODES.length) % GRID_CYCLE_MODES.length;
+        }
+        const nextMode = GRID_CYCLE_MODES[nextIdx];
+        setToastMessage(
+          lang === 'pl'
+            ? `📐 Siatka: ${nextMode.toUpperCase()} (skrót: G)`
+            : `📐 Layout: ${nextMode.toUpperCase()} (shortcut: G)`
+        );
+        setTimeout(() => setToastMessage(null), 1800);
+        return nextMode;
+      });
+    },
+    [lang]
+  );
+
+  // Space shortcut: pause / resume playback
+  const handleTogglePlayPause = useCallback(() => {
+    const targetChannel = theaterChannel || activeChannels[0];
+    if (!targetChannel) {
+      setToastMessage(
+        lang === 'pl'
+          ? 'Brak aktywnego streamu do sterowania odtwarzaniem'
+          : 'No active stream to control playback'
+      );
+      setTimeout(() => setToastMessage(null), 2000);
+      return;
+    }
+
+    const registry = (window as any).__twitchPlayers;
+    const player = registry?.get(targetChannel.toLowerCase());
+
+    if (player && typeof player.isPaused === 'function') {
+      try {
+        if (player.isPaused()) {
+          player.play();
+          setToastMessage(
+            lang === 'pl' ? `▶ Wznowiono: ${targetChannel}` : `▶ Resumed: ${targetChannel}`
+          );
+        } else {
+          player.pause();
+          setToastMessage(
+            lang === 'pl' ? `⏸ Wstrzymano: ${targetChannel}` : `⏸ Paused: ${targetChannel}`
+          );
+        }
+        setTimeout(() => setToastMessage(null), 2000);
+        return;
+      } catch (e) {
+        console.warn('Could not toggle Twitch player play/pause', e);
+      }
+    }
+
+    setToastMessage(
+      lang === 'pl'
+        ? `Sterowanie odtwarzaczem: ${targetChannel} (Spacja)`
+        : `Player control: ${targetChannel} (Space)`
+    );
+    setTimeout(() => setToastMessage(null), 2000);
+  }, [theaterChannel, activeChannels, lang]);
+
+  // M shortcut: toggle moderation drawer
+  const handleToggleModDrawer = useCallback(() => {
+    if (modPanelChannel) {
+      setModPanelChannel(null);
+      setToastMessage(
+        lang === 'pl' ? 'Zamknięto panel moderatora (M)' : 'Closed moderator panel (M)'
+      );
+      setTimeout(() => setToastMessage(null), 1800);
+    } else {
+      const candidate =
+        theaterChannel ||
+        moderatedChannels[0]?.broadcaster_login ||
+        activeChannels[0] ||
+        null;
+
+      if (candidate) {
+        setModPanelChannel(candidate.toLowerCase());
+        setToastMessage(
+          lang === 'pl'
+            ? `🛡 Otwarto panel moderatora: ${candidate} (M)`
+            : `🛡 Opened moderator panel: ${candidate} (M)`
+        );
+        setTimeout(() => setToastMessage(null), 2000);
+      } else {
+        setToastMessage(
+          lang === 'pl'
+            ? 'Brak kanałów do moderacji (dodaj stream lub zaloguj się)'
+            : 'No channels available for moderator view'
+        );
+        setTimeout(() => setToastMessage(null), 2500);
+      }
+    }
+  }, [modPanelChannel, theaterChannel, moderatedChannels, activeChannels, lang]);
+
+  // T shortcut: toggle theater mode
+  const handleToggleTheaterShortcut = useCallback(() => {
+    if (theaterChannel) {
+      setTheaterChannel(null);
+      setToastMessage(
+        lang === 'pl' ? 'Wyjście z trybu kinowego (T)' : 'Exited theater mode (T)'
+      );
+      setTimeout(() => setToastMessage(null), 1800);
+    } else if (activeChannels.length > 0) {
+      const target = activeChannels[0].toLowerCase();
+      setTheaterChannel(target);
+      setToastMessage(
+        lang === 'pl' ? `🎭 Tryb kinowy: ${target} (T)` : `🎭 Theater mode: ${target} (T)`
+      );
+      setTimeout(() => setToastMessage(null), 1800);
+    }
+  }, [theaterChannel, activeChannels, lang]);
+
+  // Escape shortcut: close active modal/drawer/theater
+  const handleEscape = useCallback(() => {
+    if (shortcutsModalOpen) {
+      setShortcutsModalOpen(false);
+      return;
+    }
+    if (loginModalOpen) {
+      setLoginModalOpen(false);
+      return;
+    }
+    if (settingsOpen) {
+      setSettingsOpen(false);
+      return;
+    }
+    if (xayoModalOpen) {
+      setXayoModalOpen(false);
+      return;
+    }
+    if (modPanelChannel) {
+      setModPanelChannel(null);
+      return;
+    }
+    if (theaterChannel) {
+      setTheaterChannel(null);
+      return;
+    }
+  }, [shortcutsModalOpen, loginModalOpen, settingsOpen, xayoModalOpen, modPanelChannel, theaterChannel]);
+
+  // 1-9 shortcuts: select stream index
+  const handleSelectStreamIndex = useCallback(
+    (index: number) => {
+      if (activeChannels[index]) {
+        const target = activeChannels[index].toLowerCase();
+        setTheaterChannel((current) => (current === target ? null : target));
+        setToastMessage(
+          lang === 'pl'
+            ? `Stream #${index + 1}: ${target}`
+            : `Stream #${index + 1}: ${target}`
+        );
+        setTimeout(() => setToastMessage(null), 1800);
+      }
+    },
+    [activeChannels, lang]
+  );
+
+  // Bind Global Keyboard Shortcuts
+  useGlobalKeyboardShortcuts({
+    onTogglePlayPause: handleTogglePlayPause,
+    onToggleModDrawer: handleToggleModDrawer,
+    onCycleGridMode: handleCycleGridMode,
+    onToggleTheater: handleToggleTheaterShortcut,
+    onToggleSidebar: () => setSidebarOpen((prev) => !prev),
+    onToggleXayoModal: () => setXayoModalOpen((prev) => !prev),
+    onToggleSettings: () => setSettingsOpen((prev) => !prev),
+    onToggleShortcutsModal: () => setShortcutsModalOpen((prev) => !prev),
+    onEscape: handleEscape,
+    onSelectStreamIndex: handleSelectStreamIndex,
+  });
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0e0e10] text-[#efeff1] font-sans">
@@ -337,7 +705,31 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenModView={(ch) => setModPanelChannel(ch.toLowerCase())}
         isLoadingData={isLoadingData}
-        onRefreshChannels={() => token && loadTwitchData(token)}
+        onRefreshChannels={async () => {
+          if (token) {
+            await loadTwitchData(token);
+          } else {
+            const allLogins = Array.from(
+              new Set([
+                ...moderatedChannels.map((c) => c.broadcaster_login.toLowerCase().trim()),
+                ...followedChannels.map((c) => c.broadcaster_login.toLowerCase().trim()),
+                ...activeChannels.map((c) => c.toLowerCase().trim()),
+              ])
+            );
+            if (allLogins.length > 0) {
+              setIsLoadingData(true);
+              try {
+                const map = await getLiveStreams(allLogins, null);
+                setLiveStreams((prev) => ({ ...prev, ...map }));
+              } finally {
+                setIsLoadingData(false);
+              }
+            }
+          }
+        }}
+        recentStreams={recentStreams}
+        onRemoveRecentStream={handleRemoveRecentStream}
+        onClearRecentStreams={handleClearRecentStreams}
         lang={lang}
       />
 
@@ -357,6 +749,7 @@ export default function App() {
           onClearAllStreams={handleClearAllStreams}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenXayoModal={() => setXayoModalOpen(true)}
+          onOpenShortcuts={() => setShortcutsModalOpen(true)}
           lang={lang}
           onToggleLang={handleToggleLang}
         />
@@ -410,10 +803,12 @@ export default function App() {
             moderatedChannels={moderatedChannels}
             theaterChannel={theaterChannel}
             gridMode={gridMode}
+            globalAutoPlay={globalAutoPlay}
             onToggleTheater={handleToggleTheater}
             onCloseStream={handleRemoveChannel}
             onAddChannel={handleAddChannel}
             onOpenModView={(ch) => setModPanelChannel(ch.toLowerCase())}
+            onStreamLiveDetected={handleStreamLiveDetected}
             lang={lang}
           />
         </main>
@@ -432,6 +827,8 @@ export default function App() {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSaveToken={handleTokenSuccess}
+        globalAutoPlay={globalAutoPlay}
+        onUpdateGlobalAutoPlay={handleUpdateGlobalAutoPlay}
         lang={lang}
       />
 
@@ -457,6 +854,13 @@ export default function App() {
         moderatedChannels={moderatedChannels}
         liveStreams={liveStreams}
         onSelectChannel={(ch) => setModPanelChannel(ch.toLowerCase())}
+        lang={lang}
+      />
+
+      {/* Keyboard Shortcuts Cheat Sheet Modal */}
+      <KeyboardShortcutsModal
+        isOpen={shortcutsModalOpen}
+        onClose={() => setShortcutsModalOpen(false)}
         lang={lang}
       />
     </div>

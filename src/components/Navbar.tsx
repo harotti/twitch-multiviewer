@@ -13,6 +13,7 @@ import {
   Tv,
   Volume2,
   TrendingUp,
+  Keyboard,
 } from 'lucide-react';
 import { GridMode } from '../types';
 
@@ -26,6 +27,7 @@ interface NavbarProps {
   onClearAllStreams: () => void;
   onOpenSettings: () => void;
   onOpenXayoModal?: () => void;
+  onOpenShortcuts?: () => void;
   lang: 'pl' | 'en';
   onToggleLang: () => void;
 }
@@ -40,6 +42,7 @@ export function Navbar({
   onClearAllStreams,
   onOpenSettings,
   onOpenXayoModal,
+  onOpenShortcuts,
   lang,
   onToggleLang,
 }: NavbarProps) {
@@ -67,8 +70,16 @@ export function Navbar({
       <div className="flex items-center gap-2">
         <button
           onClick={onToggleSidebar}
-          title={sidebarOpen ? 'Schowaj panel boczny' : 'Pokaż panel boczny'}
-          className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+          title={
+            sidebarOpen
+              ? lang === 'pl'
+                ? 'Schowaj panel boczny (Skrót: B)'
+                : 'Hide sidebar (Hotkey: B)'
+              : lang === 'pl'
+                ? 'Pokaż panel boczny (Skrót: B)'
+                : 'Show sidebar (Hotkey: B)'
+          }
+          className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -114,7 +125,7 @@ export function Navbar({
         <div className="hidden md:flex items-center bg-[#121214] p-0.5 rounded-lg border border-zinc-800">
           <button
             onClick={() => onChangeGridMode('auto')}
-            title="Auto Grid"
+            title={lang === 'pl' ? 'Auto Grid (Skrót: G przełącza układy)' : 'Auto Grid (Hotkey: G cycles layouts)'}
             className={`p-1.5 rounded text-xs transition-colors ${
               gridMode === 'auto'
                 ? 'bg-purple-600 text-white'
@@ -185,11 +196,23 @@ export function Navbar({
         {onOpenXayoModal && (
           <button
             onClick={onOpenXayoModal}
-            title={lang === 'pl' ? 'Statystyki czasu xayo.pl' : 'xayo.pl watch time stats'}
+            title={lang === 'pl' ? 'Statystyki czasu xayo.pl (Skrót: X)' : 'xayo.pl watch time stats (Hotkey: X)'}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-purple-950/70 hover:bg-purple-900/90 border border-purple-600/50 text-purple-300 hover:text-white transition-colors text-xs font-semibold cursor-pointer"
           >
             <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
             <span className="hidden lg:inline">{lang === 'pl' ? 'Statystyki xayo.pl' : 'xayo.pl Stats'}</span>
+            <kbd className="hidden xl:inline text-[9px] px-1 rounded bg-purple-900/60 border border-purple-500/40 font-mono text-purple-300">X</kbd>
+          </button>
+        )}
+
+        {/* Keyboard Shortcuts Dialog button */}
+        {onOpenShortcuts && (
+          <button
+            onClick={onOpenShortcuts}
+            title={lang === 'pl' ? 'Skróty klawiszowe (Skrót: ? lub F1)' : 'Keyboard Shortcuts (Hotkey: ? or F1)'}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+          >
+            <Keyboard className="w-4 h-4" />
           </button>
         )}
 
@@ -197,7 +220,7 @@ export function Navbar({
         <button
           onClick={onToggleLang}
           title={lang === 'pl' ? 'Zmień język (PL/EN)' : 'Switch language (PL/EN)'}
-          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors text-xs font-bold uppercase tracking-wider"
+          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors text-xs font-bold uppercase tracking-wider cursor-pointer"
         >
           {lang}
         </button>
@@ -205,8 +228,8 @@ export function Navbar({
         {/* Settings button */}
         <button
           onClick={onOpenSettings}
-          title={lang === 'pl' ? 'Ustawienia aplikacji' : 'App Settings'}
-          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+          title={lang === 'pl' ? 'Ustawienia aplikacji (Skrót: S)' : 'App Settings (Hotkey: S)'}
+          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
         >
           <SettingsIcon className="w-4 h-4" />
         </button>
